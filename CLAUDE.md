@@ -33,7 +33,8 @@ These are enforced by code and tests, not just convention:
 Record here only commands that have actually been run successfully. Verified with Python 3.13.5.
 
 - Setup: `python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`
-- Fast tests: `.venv/bin/pytest`
+- Fast tests: `.venv/bin/pytest` (Hypothesis derandomised; `HYPOTHESIS_PROFILE=explore` for a wider random search)
+- Slow tests: `.venv/bin/pytest -m slow` (version differential test; needs `java` and Maven 3.9.11's `lib/maven-artifact-3.9.11.jar`, found via `mvn` on PATH or `GIML_MAVEN_ARTIFACT_JAR`)
 - CLI: `.venv/bin/giml --version`
 
 ## Layout
@@ -61,7 +62,7 @@ Newest first. One line each: date, decision, reason.
 
 Project-specific traps discovered while working (tool quirks, platform differences, flaky areas). One line each.
 
-- (none yet)
+- Maven's `ComparableVersion` is not a total order on degenerate strings (`"" < A < 0A0 < ""`) and its canonical form is not always idempotent (`0.alpha-ga -> 0.alpha -> alpha`). The port reproduces both; never assume sort stability on junk versions.
 
 ## Open CONFIRM items
 

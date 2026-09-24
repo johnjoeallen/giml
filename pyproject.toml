@@ -30,7 +30,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not slow' --strict-markers"
+addopts = "-m 'not slow' --strict-markers --import-mode=importlib"
 markers = [
     "slow: long-running or external-tool tests; run with `pytest -m slow`",
 ]
