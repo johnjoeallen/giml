@@ -220,7 +220,8 @@ def _measure(repo: RepoState, reactor: list[Path], worktree: Path, state_dir: Pa
     pit = session.mvn("pit", ["test-compile", "org.pitest:pitest-maven:mutationCoverage", "-Denforcer.skip=true",
                               "-DtimestampedReports=false"])  # fmt: skip
     mutations = Mutations()
-    for fact in facts:
+    # A failed PIT run's reports are partial (or cut off mid-write when it was killed); never read them.
+    for fact in facts if pit.succeeded else []:
         if fact.pit_report.is_file():
             mutations = mutations + read_pit(fact.pit_report)
     if not pit.succeeded or mutations.total == 0:

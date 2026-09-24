@@ -28,8 +28,9 @@ CONFIG = load_gate_config(default_gate_config_path())
 class FakeMaven:
     """Writes the reports each Maven step would produce, from the real fixture reports."""
 
-    def __init__(self, fail_on=(), flaky=False, enforcer_log=None):
+    def __init__(self, fail_on=(), flaky=False, enforcer_log=None, pit_truncated=False):
         self.fail_on, self.flaky, self.enforcer_log = set(fail_on), flaky, enforcer_log
+        self.pit_truncated = pit_truncated
         self.calls: list[list[str]] = []
         self.envs: list = []
 
@@ -56,10 +57,11 @@ class FakeMaven:
                 target = project / module / "target" / "classes" / "org" / "giml" / "fixture" / f"{cls}.class"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(b"class")
-        elif step == "pit" and ok:
+        elif step == "pit" and (ok or self.pit_truncated):
             reports = project / "core" / "target" / "pit-reports"
             reports.mkdir(parents=True, exist_ok=True)
-            shutil.copy(REPORTS / "mutations-core.xml", reports / "mutations.xml")
+            report = (REPORTS / "mutations-core.xml").read_text()
+            (reports / "mutations.xml").write_text(report[: len(report) // 2] if self.pit_truncated else report)
         elif step == "copy" and ok:
             directory = next(a for a in args if a.startswith("-DoutputDirectory=")).split("=", 1)[1]
             Path(directory).mkdir(parents=True, exist_ok=True)
@@ -148,6 +150,13 @@ def test_pit_failure_makes_pit_metrics_unavailable(repo, tmp_path):
     assert result["measured"]["pit_test_strength"] is None
     assert result["unavailable"]["pit_test_strength"].startswith("PIT failed; see ")
     assert result["mutations"] == {}
+
+
+def test_pit_killed_mid_run_leaves_a_partial_report_that_is_not_read(repo, tmp_path):
+    outcome, _, _ = run(repo, tmp_path, FakeMaven(fail_on={"pit"}, pit_truncated=True))
+    assert outcome.result["measured"]["pit_mutation_coverage"] is None
+    assert outcome.result["unavailable"]["pit_mutation_coverage"].startswith("PIT failed; see ")
+    assert outcome.result["mutations"] == {}
 
 
 def test_enforcer_baseline_failure_is_recorded_not_fatal(repo, tmp_path):
