@@ -57,9 +57,10 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-24: giml adds missing quality tooling (JaCoCo, PIT, enforcer bans) in its worktree as a separate `[giml-setup]` commit with giml-pinned versions; a low score still leaves the branch so the developer can take the setup back and raise scores. Only a Maven build with unit tests is a hard prerequisite (spec §3). User instruction.
 - 2026-09-24: Multi-module reactors are in phase 1 (so ../redkite can be used); rewind restores every reactor pom.xml; M5 edits versions in the declaring module. User choice.
 - 2026-09-24: Git LFS allowed; giml disables the LFS filter on every git call so worktrees hold pointer files and nothing is downloaded. Submodules still refused. User choice.
-- 2026-09-24: Target projects must configure maven-enforcer with banDuplicateClasses (extra-enforcer-rules), banDuplicatePomDependencyVersions and dependencyConvergence; giml checks, never installs (check lands with M3 prerequisites). User instruction.
+- 2026-09-24: Quality tooling = JaCoCo, PIT and maven-enforcer with banDuplicateClasses (extra-enforcer-rules), banDuplicatePomDependencyVersions and dependencyConvergence. User instruction.
 - 2026-09-24: A tier measures test quality (unit/PIT levels) only; the CVE and best-update criteria apply identically to every tier (spec §6, §8.5). User clarification.
 - 2026-09-24: Tiers hold only unit/PIT thresholds plus max_excluded_share. Integration tests and the startup check are `verification` stages for every tier; autonomy is a separate tier->action mapping. Gate config bumped to version 3. User choice.
 - 2026-09-24: M2 `giml plan` is a stub that stops after workspace setup (stop reason `planning_not_implemented`) until M5. User choice.
@@ -74,7 +75,7 @@ Newest first. One line each: date, decision, reason.
 - 2026-09-24: Spec §9.3 (sandbox posture) dropped: laptop builds must pull recent deps from whatever Maven repo is configured. User instruction.
 - 2026-09-24: Network is allowed; the restriction is no AI API calls (hard rule 4 rewritten). User instruction.
 - 2026-09-24: Engine is all Python (≥3.12, stdlib-first, PyYAML, pytest/Hypothesis; own gate via coverage.py + mutmut). User instruction; spec section 3 rewritten.
-- 2026-09-24: Target projects must already have unit tests, JaCoCo, PIT and optionally Failsafe configured; giml checks, never installs (exit 5). User instruction.
+- 2026-09-24: (Superseded the same day) Target projects had to configure JaCoCo/PIT themselves.
 - 2026-09-24: Dependency tree comes from pinned `maven-dependency-plugin` JSON output; Python has no Maven Resolver.
 - 2026-09-24: Reuse source is RedKite (`../redkite`), not Arete: port OSV range matching + `maven-metadata.xml` parsing to Python; skip its live OSV queries, TTL caches, custom version comparators.
 - 2026-09-24: Spec moved to `docs/giml-spec.md`; repo initialised with `git init` (branch `main`).

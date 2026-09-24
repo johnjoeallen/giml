@@ -86,14 +86,15 @@ Confirmed 2026-09-24 (was CONFIRM item 1):
 - Tests for giml itself: **pytest** and **Hypothesis**. giml's own quality gate (section 0) uses **coverage.py** (line and branch) and **mutmut** (test strength and mutation coverage) as the Python equivalents of JaCoCo and PIT.
 - Reuse from the user's **RedKite** project (`../redkite`, Java), translated to Python where suitable: the OSV affected-range matching logic and its fixture tests, and `maven-metadata.xml` parsing. Its live per-package OSV querying, TTL caches and custom version comparators are not reused.
 
-Target project prerequisites (giml checks these and never installs or configures them):
+Target project requirements and quality tooling:
 
-- A working Maven build on a JDK the developer has installed.
-- Unit tests (Surefire), **JaCoCo** producing `jacoco.xml`, and **pitest-maven** configured with XML output.
-- **maven-enforcer-plugin** bound to the build with all three duplicate/convergence bans (confirmed 2026-09-24): `banDuplicateClasses` (from `org.codehaus.mojo:extra-enforcer-rules`), `banDuplicatePomDependencyVersions` and `dependencyConvergence`. These make duplicate classes and version conflicts fail the build, which the planner relies on (failure classes `duplicate_classes`, `enforcer_convergence`).
+- A working Maven build on a JDK the developer has installed, with unit tests (Surefire). These are true prerequisites: giml cannot supply them.
+- **Quality tooling** (below) is needed for assessment and verification. A developer does **not** have to configure it first (confirmed 2026-09-24). Where the project lacks any of it, giml adds it in its own worktree only, as a separate, clearly marked setup commit on the result branch (`[giml-setup] ...`), using plugin versions pinned by giml. The developer's checkout is never touched (hard rule 2). The setup commit makes assessment possible; if the project then scores below a tier, the report says so and the branch is still left for review, so the developer can take the setup commit back to their own branch and raise the scores.
+- Quality tooling: **JaCoCo** producing `jacoco.xml`, and **pitest-maven** producing XML.
+- Quality tooling: **maven-enforcer-plugin** bound to the build with all three duplicate/convergence bans (confirmed 2026-09-24): `banDuplicateClasses` (from `org.codehaus.mojo:extra-enforcer-rules`), `banDuplicatePomDependencyVersions` and `dependencyConvergence`. These make duplicate classes and version conflicts fail the build, which the planner relies on (failure classes `duplicate_classes`, `enforcer_convergence`).
 - Optional: integration tests (Failsafe / `*IT`).
 - Single-module projects and multi-module reactors are both supported. The reactor is the project's `pom.xml` plus every module it declares (at top level or in profiles), recursively. A declared module whose `pom.xml` is missing is a configuration error (exit 5); a module outside the project directory is unsupported (exit 3). In a reactor the prerequisites may be declared in the parent and inherited.
-- Missing prerequisites stop `assess` and `plan` with exit code 5 and name what is missing.
+- Missing quality tooling is added as above and listed in the report. Only a missing true prerequisite (no Maven build, no unit tests) stops `assess` and `plan`, with exit code 5.
 
 Repository layout (Maven multi-module):
 
@@ -178,7 +179,7 @@ Unpushed local commits are **allowed** (confirmed 2026-09-24: "no outstanding co
 - **Result branch**: `giml/<base-sha-short>/<UTC-timestamp>`, created from the base commit in its own worktree.
 - **Trial worktrees**: throwaway worktrees (or reused scratch directories) for candidate builds. Failed attempts leave no git history.
 - **Commits on the result branch**: one commit per *accepted step*, each verified to pass all required stages. The tip is the best verified state; earlier commits are fallback points.
-- Commit content: only version edits to POM files (section 8.4), except the synthetic rewind commit of section 5.3. Commit message includes: what changed, CVEs cleared, remaining CVEs, tier, evidence reference (run id).
+- Commit content: only version edits to POM files (section 8.4), except the synthetic rewind commit of section 5.3 and the quality-tooling setup commit of section 3. Commit message includes: what changed, CVEs cleared, remaining CVEs, tier, evidence reference (run id).
 - Git hooks are **disabled** in tool-owned worktrees (`core.hooksPath` set to an empty directory).
 - Cleanup: `giml clean` removes worktrees and (optionally, with `--branches`) result branches. Stale worktrees from crashed runs are detected at startup and reported.
 
@@ -190,7 +191,7 @@ To create realistic "behind on dependencies" states from a project's own history
 2. The result branch is named `giml/rewind/<base-sha-short>/<UTC-timestamp>` so it can never be mistaken for a normal result.
 3. In the result worktree, every reactor `pom.xml` (section 3, as discovered at the base commit) that also exists at `<commit>` is replaced by its content there; a module `pom.xml` that did not exist yet keeps its base content and is listed in the commit message and the report. All other files stay at the base commit. This is committed as the first commit on the result branch, with a message starting `[giml-rewind]` that names the rewind commit and states it is synthetic.
 4. The rewound state is the run's **baseline** (section 9.1). Verification rules (gate config, `.redkite/settings.yml`, tier) still come from the base commit (hard rule 7); only `pom.xml` files are rewound. If build or unit tests fail at the rewound baseline, the run stops with stop reason `rewind_baseline_failed` (the base code does not work with the old POM), and this is recorded as an unusable rewind point.
-5. If the rewound `pom.xml` lacks plugins required by the prerequisites (section 3), the run stops with exit 5 and names them.
+5. If the rewound `pom.xml` files lack quality tooling (section 3), giml adds it in the setup commit that follows the rewind commit, exactly as for a normal run.
 6. Planning then proceeds forward from the rewound state as in a normal run.
 7. The base commit's own `pom.xml` is a known-good reference. The report compares, per dependency: rewound version, giml's result, and the base commit's version, with the CVE exposure of each state.
 
@@ -588,7 +589,7 @@ Work in order; stop at each checkpoint.
 - Acceptance: tests prove a dirty tree is refused, the developer's checkout is untouched after a run, `push` cannot be invoked, hooks are disabled in worktrees, crashed runs are detected, reactor modules are discovered (including in profiles), `--rewind-to` creates the marked rewind commit with only `pom.xml` files changed and rejects non-ancestor commits.
 
 **M3 — Gate assessment (est. 1 week)**
-- JaCoCo and PIT collectors (strength and mutation coverage computed from raw statuses), integration-test detection, flake check, excluded share, tier evaluator, `giml assess`.
+- Quality-tooling setup (section 3: add missing JaCoCo, PIT and enforcer bans in the worktree as a `[giml-setup]` commit), JaCoCo and PIT collectors (strength and mutation coverage computed from raw statuses), integration-test detection, flake check, excluded share, tier evaluator, `giml assess`.
 - **Survey run** across the user's real projects producing a table of the four metrics side by side, to calibrate tier numbers.
 - Acceptance: assessment JSON matches section 6.4; survey report produced; thresholds reviewed with the user before locking the config version.
 
