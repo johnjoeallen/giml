@@ -25,7 +25,8 @@ These are enforced by code and tests, not just convention:
 
 ## Current status
 
-- Milestone: **M1 (Foundations) in progress**. Plan: skeleton, version ordering, config, interfaces, store, cache, CVSS, OSV, Central, CLI, self-gate.
+- Milestone: **M1 (Foundations) complete, awaiting review** (2026-09-24). Next: M2, Git safety.
+- Self-gate at M1: Tier B PASS (line 99.5%, branch 98.1%, test strength 94.2%, mutation coverage 94.2% of 2313 mutants, excluded share 0.9%, 0 flaky of 5 runs).
 - Update this line and the log below at each checkpoint.
 
 ## Build and test commands
@@ -36,6 +37,7 @@ Record here only commands that have actually been run successfully. Verified wit
 - Fast tests: `.venv/bin/pytest` (Hypothesis derandomised; `HYPOTHESIS_PROFILE=explore` for a wider random search)
 - Slow tests: `.venv/bin/pytest -m slow` (version differential test; needs `java` and Maven 3.9.11's `lib/maven-artifact-3.9.11.jar`, found via `mvn` on PATH or `GIML_MAVEN_ARTIFACT_JAR`)
 - CLI: `.venv/bin/giml --version`
+- Self-gate (Tier B): `.venv/bin/python scripts/selfgate.py --flake-runs 5` (about 25 s; runs coverage, mutmut and 5 test runs; `--skip-mutation` for quick coverage only)
 - Real sync into a throwaway state dir: `.venv/bin/giml --state-dir <dir> sync --coordinate com.fasterxml.jackson.core:jackson-databind` then `.venv/bin/giml --state-dir <dir> status` (about 6 s; OSV zip about 10 MB)
 
 ## Layout
@@ -43,6 +45,9 @@ Record here only commands that have actually been run successfully. Verified wit
 Python package under `src/giml/` with tests under `tests/`; see spec section 3 for the layout. Record deviations from the spec layout here.
 
 - `config/gate-config.yaml` is the default gate config (spec §6.1); loaded by `giml.core.config`.
+- `scripts/selfgate.py` is giml's own quality gate (not part of the package).
+- Snapshots live in `<state>/snapshots/<source>/<UTC-ts>-<hash12>/` with `manifest.json`. OSV has a derived `index.sqlite`; Central stores only its raw `central.json` (small enough to load whole, so no index).
+- State DB: `<state>/state.db`; M1 migrations create only the `snapshot` table. Other spec §11 tables arrive with their milestones.
 
 ## Decisions log
 
@@ -65,6 +70,10 @@ Newest first. One line each: date, decision, reason.
 
 Project-specific traps discovered while working (tool quirks, platform differences, flaky areas). One line each.
 
+- `http.client` does not raise when a chunked read ends before Content-Length; `UrlLibFetcher.download` checks the byte count itself.
+- mutmut runs tests from a copy in `mutants/`; anything tests read outside `src/` and `tests/` must be listed in `[tool.mutmut] also_copy` (currently `config/`, `scripts/`).
+- mutmut mutates string literals (PIT does not), so SQL keyword case creates equivalent mutants; SQL literals carry `# pragma: no mutate` and the self-gate counts those lines as excluded.
+- argparse help wraps to the terminal width; golden help tests pin `COLUMNS=100`.
 - Maven's `ComparableVersion` is not a total order on degenerate strings (`"" < A < 0A0 < ""`) and its canonical form is not always idempotent (`0.alpha-ga -> 0.alpha -> alpha`). The port reproduces both; never assume sort stability on junk versions.
 
 ## Open CONFIRM items

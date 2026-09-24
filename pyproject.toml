@@ -41,3 +41,7 @@ source = ["giml"]
 
 [tool.coverage.report]
 show_missing = true
+
+[tool.mutmut]
+source_paths = ["src/giml/"]
+also_copy = ["config/", "scripts/"]
