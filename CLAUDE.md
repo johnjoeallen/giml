@@ -25,7 +25,7 @@ These are enforced by code and tests, not just convention:
 
 ## Current status
 
-- Milestone: **M3 (Gate assessment) in progress** (2026-09-24). `giml assess`, the survey script and per-project JDK choice are done; the survey ran on redkite and chronograf (both below Tier B). Open: spec Q7 (lock tier numbers) and Q8 (metric definitions), then the M3 checkpoint.
+- Milestone: **M3 (Gate assessment) complete, awaiting review** (2026-09-24). `giml assess`, the survey script and per-project JDK choice are done; the survey ran on redkite and chronograf (both below Tier B); Q7 and Q8 answered. Next: M4, build runner, cache and outcome logging.
 - M1 accepted 2026-09-24. M2 checkpoint recorded (dff9705); work then continued into M3.
 - Self-gate during M3: Tier B PASS (line 99.4%, branch 97.2%, test strength 90.4%, mutation coverage 89.9%, excluded share 2.6%, 0 flaky of 5 runs).
 - Update this line and the log below at each checkpoint.
@@ -61,6 +61,8 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-24: Tier numbers stay at gate config version 3 (spec Q7); the survey projects were too far below Tier B to calibrate boundaries. Policy's 80% = PIT mutation coverage, 85% = test strength (Q8), as Tier B already says. User answers.
+- 2026-09-24: Initial project set for now: redkite and chronograf (spec Q6, M3 part). The deliberately-behind project for M5 is still open.
 - 2026-09-24: JDK choice (spec §3.1): project `.giml/settings.yml` gives `jdk` (major or full version) or `java_home`; versions resolve via global `~/.giml/config.yml` `jdks`, then `~/.m2/toolchains.xml`; no settings means inherited JAVA_HOME. The global config knows nothing about projects. A repo-named `java_home` is accepted if it has `bin/javac` (a deliberate exception to hard rule 5). User choice; found when chronograf (Lombok 1.18.32) failed on JDK 25.
 - 2026-09-24: A module with production code but no tests blocks every tier (PIT skips such modules, so mutation figures would be inflated); the report names them. User choice.
 - 2026-09-24: Coverage is computed from one whole-reactor JaCoCo CLI report (org.jacoco.cli, giml-pinned) because JaCoCo's per-module report goal skips modules without tests. Found on the fixture reactor.

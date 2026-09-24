@@ -303,18 +303,30 @@ Persisted and printed as JSON:
     "pit_test_strength": 93.1,
     "pit_mutation_coverage": 88.4
   },
-  "integration_tests": true,
+  "mutations": {"KILLED": 240, "SURVIVED": 18, "NO_COVERAGE": 14},
+  "unavailable": {},
+  "integration_tests": {"count": 3, "failsafe_declared": true},
   "flaky_tests": [],
+  "untested_modules": [],
   "excluded_share": 6,
-  "excluded": ["..."],
-  "startup_check": "verified|not_configured|baseline_failed",
-  "failed_for_declared": ["unit_branch_coverage", "pit_mutation_coverage"],
+  "excluded": {"jacoco_classes": ["..."], "pit_excluded_classes": ["..."]},
+  "startup_check": "not_configured|configured|verified|baseline_failed",
+  "enforcer": {"status": "passed|baseline_failed", "failed_rules": [], "log": "..."},
+  "tooling_added": ["..."],
+  "tooling_kept": ["..."],
+  "setup_commit": "...",
+  "failed_for_declared": [
+    {"metric": "unit_branch_coverage", "required": 80, "measured": 78.0, "short_by": 2.0},
+    {"metric": "pit_mutation_coverage", "required": 90, "measured": 88.4, "short_by": 1.6}
+  ],
   "autonomy": "suggest_only",
   "base_sha": "...",
   "measured_at": "2026-09-24T00:00:00Z",
   "expires": "2026-10-24T00:00:00Z"
 }
 ```
+
+`unavailable` names each metric that could not be measured, with the reason (its value in `measured` is then null). A `failed_for_declared` entry for an unmeasured metric has `measured: null` and a `reason` instead of `short_by`; entries for `excluded_share`, `flaky_tests` and `untested_modules` carry `maximum`/`measured`, `tests` or `modules` instead of `required`/`measured`. `startup_check` is `configured` until M6 verifies it. `setup_commit` is null when nothing was added.
 
 The planner consults this before doing anything. Missing, expired, or below-B results mean **no proposals** (report-only listing of outdated/vulnerable dependencies).
 
@@ -646,9 +658,9 @@ Work in order; stop at each checkpoint.
 3. ~~Unpushed commits.~~ Answered 2026-09-24: allowed; only uncommitted changes block a run.
 4. ~~Submodules/LFS.~~ Answered 2026-09-24: submodules refused; LFS allowed with downloads disabled (revised the same day).
 5. Exact name and location of the settings file: `.redkite/settings.yml` vs the earlier `.redkite/settings.xml`; and which keys it should carry. (M6)
-6. Initial project set: which repositories, and which is deliberately behind on dependencies. (M3/M5)
-7. Initial tier numbers are placeholders; lock after the M3 survey (config version 3 since 2026-09-24). (M3)
-8. Metric definitions: gate on both PIT test strength and mutation coverage as specified; confirm which of the existing "80%" figures in current policy refers to which. (M3)
+6. Initial project set: which repositories, and which is deliberately behind on dependencies. (M3/M5) Partly answered 2026-09-24: redkite and chronograf for now (M3 survey); the deliberately-behind project for M5 is still open.
+7. ~~Initial tier numbers.~~ Answered 2026-09-24: keep config version 3 as is. The M3 survey (redkite, chronograf) found both projects far below Tier B, so it cannot calibrate the boundaries; revisit when a project scores near one.
+8. ~~Metric definitions.~~ Answered 2026-09-24: the policy's 80% is PIT mutation coverage (killed / all mutants) and its 85% is test strength (killed / mutants in covered code); Tier B already says exactly this.
 9. Which local PostgreSQL setup (install or container) and role provisioning. (M6)
 10. ~~Source of per-version release dates.~~ Answered 2026-09-24: `Last-Modified` of each version's `.pom` (search API index found stale); see section 7.2.
 11. ~~CVSS scoring.~~ Answered 2026-09-24: in-house CVSS v3.x calculator, OSV/GHSA label fallback, score source recorded; see section 7.1.
