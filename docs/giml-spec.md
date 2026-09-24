@@ -169,9 +169,9 @@ Refuse to start (exit code 2, clear message) unless:
 - The working tree is clean: no staged changes, no unstaged changes, no untracked files that are not gitignored.
 - No merge, rebase, cherry-pick or bisect is in progress.
 - No other giml run holds the repository lock (file lock in the tool's state directory).
-- Submodules and Git LFS: if present, report "unsupported in phase 1" and stop (CONFIRM whether to support later).
+- Submodules and Git LFS: if present, report "unsupported in phase 1" and stop (confirmed 2026-09-24).
 
-Unpushed local commits are **allowed**. Record the base SHA; the result branch builds on it. (CONFIRM: the requirement "no outstanding commits" is interpreted as "no uncommitted changes". If unpushed commits must also be blocked, add a preflight rule.)
+Unpushed local commits are **allowed** (confirmed 2026-09-24: "no outstanding commits" means no uncommitted changes). Record the base SHA; the result branch builds on it.
 
 ### 5.2 Worktrees and branches
 
@@ -621,8 +621,8 @@ Work in order; stop at each checkpoint.
 
 1. ~~Engine language and libraries.~~ Answered 2026-09-24: all Python; see section 3.
 2. ~~What OSV/Maven Central code can be reused?~~ Answered 2026-09-24: RedKite, not Arete; see section 3.
-3. Does "no outstanding commits" mean only uncommitted changes (assumed), or also unpushed commits? (M2)
-4. Submodules/LFS: unsupported in phase 1 (assumed). (M2)
+3. ~~Unpushed commits.~~ Answered 2026-09-24: allowed; only uncommitted changes block a run.
+4. ~~Submodules/LFS.~~ Answered 2026-09-24: unsupported in phase 1; detected and refused.
 5. Exact name and location of the settings file: `.redkite/settings.yml` vs the earlier `.redkite/settings.xml`; and which keys it should carry. (M6)
 6. Initial project set: which repositories, and which is deliberately behind on dependencies. (M3/M5)
 7. Initial tier numbers are placeholders; lock after the M3 survey. (M3)
