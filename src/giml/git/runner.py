@@ -28,6 +28,7 @@ _ALLOWED: dict[str, tuple[str, ...] | None] = {
     "ls-files": None,
     "merge-base": None,
     "remote": ("get-url",),
+    "restore": ("--source",),
     "rev-parse": None,
     "show": None,
     "status": None,
