@@ -25,12 +25,16 @@ These are enforced by code and tests, not just convention:
 
 ## Current status
 
-- Milestone: **not started** (next: M1, Foundations)
+- Milestone: **M1 (Foundations) in progress**. Plan: skeleton, version ordering, config, interfaces, store, cache, CVSS, OSV, Central, CLI, self-gate.
 - Update this line and the log below at each checkpoint.
 
 ## Build and test commands
 
-To be filled in during M1 once the skeleton builds. Record here only commands that have actually been run successfully.
+Record here only commands that have actually been run successfully. Verified with Python 3.13.5.
+
+- Setup: `python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`
+- Fast tests: `.venv/bin/pytest`
+- CLI: `.venv/bin/giml --version`
 
 ## Layout
 
@@ -43,7 +47,7 @@ Newest first. One line each: date, decision, reason.
 - 2026-09-24: Rewind mode `plan --rewind-to <commit>` (spec §5.3): restore `pom.xml` from an ancestor commit as a marked synthetic first commit, for test/training data. Git history only, no date-based rewind. User choice.
 - 2026-09-24: Phase 1 supports single-module projects only; multi-module refused with exit 3 and deferred to a later phase. User instruction.
 - 2026-09-24: Maven builds use the developer's `~/.m2` settings and local repository; only the smoke-launched app gets a per-trial home (spec §9.2).
-- 2026-09-24: Per-version release dates come from the Maven Central search API (`core=gav`); `maven-metadata.xml` has none (spec Q10).
+- 2026-09-24: Per-version release dates come from HEAD `Last-Modified` on each version's `.pom`, cached forever (spec Q10). Search API rejected: index stale (no jackson-databind >= 2.20.0 while metadata lists 2.22.3).
 - 2026-09-24: Severity uses an in-house CVSS v3.x calculator, falling back to the OSV/GHSA label; score source recorded (spec Q11).
 - 2026-09-24: Spec §9.3 (sandbox posture) dropped: laptop builds must pull recent deps from whatever Maven repo is configured. User instruction.
 - 2026-09-24: Network is allowed; the restriction is no AI API calls (hard rule 4 rewritten). User instruction.

@@ -314,7 +314,7 @@ The planner consults this before doing anything. Missing, expired, or below-B re
 
 ### 7.2 Maven Central metadata
 
-- For each `groupId:artifactId` the projects depend on (plus their candidates), fetch `maven-metadata.xml` version lists, and per-version release timestamps from the Maven Central search API (`core=gav`), since `maven-metadata.xml` carries no per-version dates.
+- For each `groupId:artifactId` the projects depend on (plus their candidates), fetch `maven-metadata.xml` version lists, and per-version release timestamps from the `Last-Modified` header of a HEAD request on each version's `.pom`, since `maven-metadata.xml` carries no per-version dates. Release dates are immutable: carry them forward between snapshots and fetch only versions not seen before. (The Central search API was considered and rejected: its index is stale, missing releases from mid-2025 onward.)
 - Store snapshot with timestamps. Release dates power the cooldown and recency scoring.
 - Cache BOM/parent POMs needed for resolution in a local repository.
 
@@ -628,5 +628,5 @@ Work in order; stop at each checkpoint.
 7. Initial tier numbers are placeholders; lock after the M3 survey. (M3)
 8. Metric definitions: gate on both PIT test strength and mutation coverage as specified; confirm which of the existing "80%" figures in current policy refers to which. (M3)
 9. Which local PostgreSQL setup (install or container) and role provisioning. (M6)
-10. ~~Source of per-version release dates.~~ Answered 2026-09-24: Maven Central search API (`core=gav`); see section 7.2.
+10. ~~Source of per-version release dates.~~ Answered 2026-09-24: `Last-Modified` of each version's `.pom` (search API index found stale); see section 7.2.
 11. ~~CVSS scoring.~~ Answered 2026-09-24: in-house CVSS v3.x calculator, OSV/GHSA label fallback, score source recorded; see section 7.1.

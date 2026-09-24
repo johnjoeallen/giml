@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "giml"
+version = "0.1.0"
+description = "Gated Increments (ML): plans and verifies joint Maven dependency upgrades locally"
+requires-python = ">=3.12"
+dependencies = [
+    "PyYAML==6.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "hypothesis==6.168.1",
+    "coverage==7.16.1",
+    "mutmut==3.8.0",
+]
+
+[project.scripts]
+giml = "giml.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"giml.store" = ["migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not slow' --strict-markers"
+markers = [
+    "slow: long-running or external-tool tests; run with `pytest -m slow`",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["giml"]
+
+[tool.coverage.report]
+show_missing = true
