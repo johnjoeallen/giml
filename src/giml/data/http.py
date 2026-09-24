@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime
 import email.utils
-import hashlib
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -24,8 +23,8 @@ class FetchError(RuntimeError):
 
 
 class Fetcher(Protocol):
-    def download(self, url: str, dest: Path) -> str:
-        """Stream a URL to a file and return the SHA-256 of its bytes."""
+    def download(self, url: str, dest: Path) -> None:
+        """Stream a URL to a file."""
 
     def get_text(self, url: str) -> str | None:
         """Fetch a text resource, or None if it does not exist (404)."""
@@ -50,19 +49,16 @@ class UrlLibFetcher:
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise FetchError(url, str(getattr(exc, "reason", exc))) from exc
 
-    def download(self, url: str, dest: Path) -> str:
+    def download(self, url: str, dest: Path) -> None:
         response = self._open(url)
         if response is None:
             raise FetchError(url, "HTTP 404")
-        digest = hashlib.sha256()
         try:
             with response, dest.open("wb") as out:
                 while chunk := response.read(_CHUNK):
-                    digest.update(chunk)
                     out.write(chunk)
         except OSError as exc:
             raise FetchError(url, f"download interrupted: {exc}") from exc
-        return digest.hexdigest()
 
     def get_text(self, url: str) -> str | None:
         response = self._open(url)

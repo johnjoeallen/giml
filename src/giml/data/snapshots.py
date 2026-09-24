@@ -36,7 +36,7 @@ class SnapshotWriter:
         self.parent = state_dir / "snapshots" / source
         self.parent.mkdir(parents=True, exist_ok=True)
         self.path = Path(tempfile.mkdtemp(dir=self.parent, prefix=".tmp-"))
-        self._raw: dict[str, str] = {}
+        self._raw: set[str] = set()
         self._committed = False
 
     def __enter__(self) -> SnapshotWriter:
@@ -46,15 +46,15 @@ class SnapshotWriter:
         if not self._committed:
             shutil.rmtree(self.path, ignore_errors=True)
 
-    def add_raw(self, name: str, sha256: str | None = None) -> Path:
+    def add_raw(self, name: str) -> Path:
         """Register a raw (fetched) file; only raw files contribute to the content hash."""
         if "/" in name or name in ("", ".", "..", MANIFEST):
             raise ValueError(f"invalid snapshot file name {name!r}")
-        self._raw[name] = sha256 or ""
+        self._raw.add(name)
         return self.path / name
 
     def commit(self, fetched_at: datetime.datetime, sources: list[str], stats: dict) -> SnapshotInfo:
-        files = {name: digest or sha256_file(self.path / name) for name, digest in sorted(self._raw.items())}
+        files = {name: sha256_file(self.path / name) for name in sorted(self._raw)}
         content_hash = hashlib.sha256(canonical_json(files).encode("utf-8")).hexdigest()
         stamp = fetched_at.astimezone(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
         name = f"{stamp}-{content_hash[:12]}"

@@ -1,5 +1,4 @@
 import datetime
-import hashlib
 
 import pytest
 
@@ -10,13 +9,12 @@ from tests.conftest import Route
 UTC = datetime.UTC
 
 
-def test_download_streams_file_and_returns_sha256(http_server, tmp_path):
-    body = b"x" * 200_000
+def test_download_streams_file(http_server, tmp_path):
+    body = bytes(range(256)) * 800
     http_server.routes["/all.zip"] = Route(body)
     dest = tmp_path / "all.zip"
-    digest = UrlLibFetcher().download(f"{http_server.base_url}/all.zip", dest)
+    UrlLibFetcher().download(f"{http_server.base_url}/all.zip", dest)
     assert dest.read_bytes() == body
-    assert digest == hashlib.sha256(body).hexdigest()
 
 
 def test_download_of_missing_resource_is_an_error(http_server, tmp_path):

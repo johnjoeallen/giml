@@ -42,13 +42,6 @@ def test_derived_files_do_not_change_the_content_hash(tmp_path):
     assert first.content_hash == second.content_hash
 
 
-def test_precomputed_hash_is_trusted(tmp_path):
-    with SnapshotWriter(tmp_path, "osv") as writer:
-        writer.add_raw("all.zip", sha256="f" * 64).write_bytes(b"data")
-        info = writer.commit(FETCHED, [], {})
-    assert read_manifest(info.path)["files"]["all.zip"] == "f" * 64
-
-
 def test_failure_before_commit_removes_temporary_directory(tmp_path):
     with pytest.raises(RuntimeError), SnapshotWriter(tmp_path, "osv") as writer:
         writer.add_raw("all.zip").write_bytes(b"partial")
