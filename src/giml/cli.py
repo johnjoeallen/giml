@@ -176,7 +176,10 @@ def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore
     print(f"branch: {ws.branch}")
     print(f"worktree: {ws.worktree}")
     if ws.rewind is not None:
-        print(f"rewound {ws.rewind.pom_path} to {ws.rewind.sha[:7]} (committed {ws.rewind.committed_at}); synthetic")
+        print(f"rewound {len(ws.rewind.pom_paths)} pom.xml file(s) to {ws.rewind.sha[:7]} "
+              f"(committed {ws.rewind.committed_at}); synthetic")  # fmt: skip
+        for path in ws.rewind.kept_paths:
+            print(f"kept at base (not present at {ws.rewind.sha[:7]}): {path}")
     print("stopped after workspace setup: planning arrives in milestone 5")
     print(f"review: git diff {ws.repo.base_sha[:7]}..{ws.branch}")
     print(f"cleanup: giml clean {ws.repo.project_dir}")

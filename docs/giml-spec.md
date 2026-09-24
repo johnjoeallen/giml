@@ -40,7 +40,7 @@ For a local Maven project in a git repository, giml:
 ### 1.3 Phase 1 scope (this document)
 
 In scope:
-- Local, report-only CLI. Python engine. Single-module Maven projects only (one `pom.xml`).
+- Local, report-only CLI. Python engine. Maven projects, single-module or multi-module reactors (confirmed 2026-09-24).
 - Data sources: OSV and Maven Central only.
 - Deterministic planner with joint sets, CVE-minimal bumps, pins and bisection.
 - Tier assessment (JaCoCo + PIT), startup verification, outcome logging.
@@ -50,14 +50,11 @@ Out of scope for phase 1:
 - PR/MR creation, CI integration, central service, GPU training, LoRA/generative fine-tuning.
 - Any call to a frontier/hosted model, at build time or run time.
 - Gradle, npm or other ecosystems.
-- Multi-module Maven reactors (planned for a later phase; see section 1.4).
 - Exploit-likelihood feeds (KEV, EPSS). OSV severity is the only risk signal.
 
 ### 1.4 Future direction (design for it, do not build it)
 
 Later the same engine will run centrally, from CI, and open PRs. Therefore all environment-specific behaviour sits behind interfaces (section 4.2), the engine is stateless with explicit inputs and outputs, and results are cacheable by content.
-
-Multi-module Maven reactors will be supported later (editing in the declaring module, reactor-wide resolution). Keep POM location and editing behind a single seam so adding them does not reshape the planner.
 
 ---
 
@@ -93,8 +90,9 @@ Target project prerequisites (giml checks these and never installs or configures
 
 - A working Maven build on a JDK the developer has installed.
 - Unit tests (Surefire), **JaCoCo** producing `jacoco.xml`, and **pitest-maven** configured with XML output.
+- **maven-enforcer-plugin** bound to the build with all three duplicate/convergence bans (confirmed 2026-09-24): `banDuplicateClasses` (from `org.codehaus.mojo:extra-enforcer-rules`), `banDuplicatePomDependencyVersions` and `dependencyConvergence`. These make duplicate classes and version conflicts fail the build, which the planner relies on (failure classes `duplicate_classes`, `enforcer_convergence`).
 - Optional: integration tests (Failsafe / `*IT`).
-- A single-module project: the root `pom.xml` declares no `<modules>` (including inside profiles). A multi-module project stops with exit code 3 and the message "multi-module projects unsupported in phase 1".
+- Single-module projects and multi-module reactors are both supported. The reactor is the project's `pom.xml` plus every module it declares (at top level or in profiles), recursively. A declared module whose `pom.xml` is missing is a configuration error (exit 5); a module outside the project directory is unsupported (exit 3). In a reactor the prerequisites may be declared in the parent and inherited.
 - Missing prerequisites stop `assess` and `plan` with exit code 5 and name what is missing.
 
 Repository layout (Maven multi-module):
@@ -169,7 +167,8 @@ Refuse to start (exit code 2, clear message) unless:
 - The working tree is clean: no staged changes, no unstaged changes, no untracked files that are not gitignored.
 - No merge, rebase, cherry-pick or bisect is in progress.
 - No other giml run holds the repository lock (file lock in the tool's state directory).
-- Submodules and Git LFS: if present, report "unsupported in phase 1" and stop (confirmed 2026-09-24).
+- Submodules: if present, report "unsupported in phase 1" and stop (confirmed 2026-09-24).
+- Git LFS is **allowed** (confirmed 2026-09-24), but giml never downloads LFS content: every git call disables the LFS filter, so LFS files in giml's worktrees are pointer files. A build that needs real LFS content fails, and the report names the LFS paths involved.
 
 Unpushed local commits are **allowed** (confirmed 2026-09-24: "no outstanding commits" means no uncommitted changes). Record the base SHA; the result branch builds on it.
 
@@ -185,12 +184,12 @@ Unpushed local commits are **allowed** (confirmed 2026-09-24: "no outstanding co
 
 ### 5.3 Rewind mode (testing and training)
 
-To create realistic "behind on dependencies" states from a project's own history, `giml plan --rewind-to <commit>` starts the run from an older `pom.xml`:
+To create realistic "behind on dependencies" states from a project's own history, `giml plan --rewind-to <commit>` starts the run from the reactor's older `pom.xml` files:
 
-1. Preflight (section 5.1) runs as normal on the developer's repository. `<commit>` must resolve, must be an ancestor of the base commit, and must contain `pom.xml`; otherwise exit 5.
+1. Preflight (section 5.1) runs as normal on the developer's repository. `<commit>` must resolve, must be an ancestor of the base commit, and must contain the project's root `pom.xml`; otherwise exit 5.
 2. The result branch is named `giml/rewind/<base-sha-short>/<UTC-timestamp>` so it can never be mistaken for a normal result.
-3. In the result worktree, `pom.xml` is replaced by its content at `<commit>` (`git show <commit>:pom.xml`); all other files stay at the base commit. This is committed as the first commit on the result branch, with a message starting `[giml-rewind]` that names the rewind commit and states it is synthetic.
-4. The rewound state is the run's **baseline** (section 9.1). Verification rules (gate config, `.redkite/settings.yml`, tier) still come from the base commit (hard rule 7); only `pom.xml` is rewound. If build or unit tests fail at the rewound baseline, the run stops with stop reason `rewind_baseline_failed` (the base code does not work with the old POM), and this is recorded as an unusable rewind point.
+3. In the result worktree, every reactor `pom.xml` (section 3, as discovered at the base commit) that also exists at `<commit>` is replaced by its content there; a module `pom.xml` that did not exist yet keeps its base content and is listed in the commit message and the report. All other files stay at the base commit. This is committed as the first commit on the result branch, with a message starting `[giml-rewind]` that names the rewind commit and states it is synthetic.
+4. The rewound state is the run's **baseline** (section 9.1). Verification rules (gate config, `.redkite/settings.yml`, tier) still come from the base commit (hard rule 7); only `pom.xml` files are rewound. If build or unit tests fail at the rewound baseline, the run stops with stop reason `rewind_baseline_failed` (the base code does not work with the old POM), and this is recorded as an unusable rewind point.
 5. If the rewound `pom.xml` lacks plugins required by the prerequisites (section 3), the run stops with exit 5 and names them.
 6. Planning then proceeds forward from the rewound state as in a normal run.
 7. The base commit's own `pom.xml` is a known-good reference. The report compares, per dependency: rewound version, giml's result, and the base commit's version, with the CVE exposure of each state.
@@ -365,7 +364,7 @@ Stop conditions (first that occurs): no untried candidate set improves the ranki
 
 - Edit **only version values** (and add `dependencyManagement` pins when required), at the location where the version is actually declared: direct `<version>`, a property, `dependencyManagement`, or the parent version.
 - Use lossless, minimal text edits so formatting and comments are untouched. Never re-serialise the whole POM.
-- Single POM only in phase 1 (section 3). If a version's declaration site cannot be determined within that POM (for example it comes only from an external parent or BOM), report "unsupported" for that dependency and leave it unchanged, except where the parent version itself is the declaration site.
+- Multi-module reactors: edit in the module that declares the version (often the reactor parent's `dependencyManagement` or `<properties>`), resolving inheritance within the reactor. If a declaration site cannot be determined inside the reactor (for example it comes only from an external parent or BOM), report "unsupported" for that dependency and leave it unchanged, except where the external parent version itself is the declaration site.
 - Every pin/deferral records a **reason** and a **re-evaluation trigger** (new release of the dependency, new advisory, POM change).
 
 ### 8.5 Ranking ("best" state)
@@ -518,7 +517,7 @@ giml clean [--all] [--branches]              remove worktrees (and optionally br
 
 `--dry-run` performs preflight, assessment, and planning without building (lists candidate sets and reasons).
 
-Exit codes: 0 success (plan produced), 1 no improvement found, 2 preflight refusal, 3 ineligible (tier/gate, or unsupported project shape such as multi-module), 4 infrastructure failure, 5 configuration error.
+Exit codes: 0 success (plan produced), 1 no improvement found, 2 preflight refusal, 3 ineligible (tier/gate, or unsupported project shape such as a module outside the project directory), 4 infrastructure failure, 5 configuration error.
 
 ---
 
@@ -585,8 +584,8 @@ Work in order; stop at each checkpoint.
 - Acceptance: `sync` produces timestamped, hashed snapshots; `status` reads them; unit tests for range matching using Maven version ordering; the tool's own build meets Tier B.
 
 **M2 — Git safety (est. 1 week)**
-- Preflight (section 5.1), git wrapper that rejects `push`, worktree/branch lifecycle, locking, `clean`, stale worktree detection, multi-module detection, rewind-mode worktree setup (section 5.3, steps 1 to 3).
-- Acceptance: tests prove a dirty tree is refused, the developer's checkout is untouched after a run, `push` cannot be invoked, hooks are disabled in worktrees, crashed runs are detected, a multi-module project is refused with exit 3, `--rewind-to` creates the marked rewind commit with only `pom.xml` changed and rejects non-ancestor commits.
+- Preflight (section 5.1), git wrapper that rejects `push`, worktree/branch lifecycle, locking, `clean`, stale worktree detection, reactor module discovery, rewind-mode worktree setup (section 5.3, steps 1 to 3).
+- Acceptance: tests prove a dirty tree is refused, the developer's checkout is untouched after a run, `push` cannot be invoked, hooks are disabled in worktrees, crashed runs are detected, reactor modules are discovered (including in profiles), `--rewind-to` creates the marked rewind commit with only `pom.xml` files changed and rejects non-ancestor commits.
 
 **M3 — Gate assessment (est. 1 week)**
 - JaCoCo and PIT collectors (strength and mutation coverage computed from raw statuses), integration-test detection, flake check, excluded share, tier evaluator, `giml assess`.
@@ -617,7 +616,7 @@ Work in order; stop at each checkpoint.
 ## 18. Testing strategy for giml itself
 
 - Unit tests for version ordering, OSV range matching, candidate generation, ranking, signature normalisation, POM edit preservation (golden files).
-- Integration tests using small fixture Maven projects committed under `tests/fixtures/` covering: clean upgrade, transitive conflict, API-breaking upgrade, startup-only failure, migration failure, unreachable database, dirty repo, detached HEAD, multi-module refusal, rewind to an older `pom.xml` (usable and `rewind_baseline_failed`).
+- Integration tests using small fixture Maven projects committed under `tests/fixtures/` covering: clean upgrade, transitive conflict, API-breaking upgrade, startup-only failure, migration failure, unreachable database, dirty repo, detached HEAD, multi-module reactor, LFS pointer files, rewind to an older `pom.xml` (usable and `rewind_baseline_failed`).
 - Property tests for the delta-debugging isolation (given a known failing subset, it must find it within a bound).
 - No-AI-API test: no AI/LLM client library is a dependency, and planning and ML stages run with connections to known AI API hosts blocked; must succeed.
 - Safety tests: `push` rejected; developer checkout unchanged; secrets absent from all artefacts.
@@ -629,7 +628,7 @@ Work in order; stop at each checkpoint.
 1. ~~Engine language and libraries.~~ Answered 2026-09-24: all Python; see section 3.
 2. ~~What OSV/Maven Central code can be reused?~~ Answered 2026-09-24: RedKite, not Arete; see section 3.
 3. ~~Unpushed commits.~~ Answered 2026-09-24: allowed; only uncommitted changes block a run.
-4. ~~Submodules/LFS.~~ Answered 2026-09-24: unsupported in phase 1; detected and refused.
+4. ~~Submodules/LFS.~~ Answered 2026-09-24: submodules refused; LFS allowed with downloads disabled (revised the same day).
 5. Exact name and location of the settings file: `.redkite/settings.yml` vs the earlier `.redkite/settings.xml`; and which keys it should carry. (M6)
 6. Initial project set: which repositories, and which is deliberately behind on dependencies. (M3/M5)
 7. Initial tier numbers are placeholders; lock after the M3 survey (config version 3 since 2026-09-24). (M3)

@@ -18,7 +18,7 @@ from giml.git.preflight import RepoState, locate, preflight, project_key
 from giml.git.rewind import RewindTarget, apply_rewind, resolve_rewind
 from giml.git.runner import Git
 from giml.git.worktrees import WorktreeManager, remove_worktree, require_identity, result_branch
-from giml.maven.project import check_single_module
+from giml.maven.project import discover_reactor
 from giml.store.sqlite_store import SqliteStateStore
 
 STOP_PLANNING_NOT_IMPLEMENTED = "planning_not_implemented"
@@ -69,8 +69,8 @@ def set_up(
 ) -> Workspace:
     """Preflight, lock, record the run and create its result worktree (plus rewind commit)."""
     repo = preflight(path, allow_detached)
-    check_single_module(repo.project_dir)
-    rewind = resolve_rewind(repo, rewind_to) if rewind_to else None
+    reactor = discover_reactor(repo.project_dir)
+    rewind = resolve_rewind(repo, rewind_to, reactor) if rewind_to else None
     require_identity(repo.root)
 
     with ProjectLock(state_dir, repo.project_key):

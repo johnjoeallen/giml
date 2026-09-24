@@ -6,7 +6,10 @@ Every command goes through ``Git.run``, which:
   * disables hooks for every invocation with ``-c core.hooksPath=/dev/null``, so no repository
     hook runs inside giml's worktrees and the shared git config is never modified;
   * scrubs ``GIT_*`` variables from the environment so the developer's shell cannot redirect git
-    at another repository, index or work tree.
+    at another repository, index or work tree;
+  * switches the Git LFS filter off for commands that write files into giml's worktrees, so LFS
+    content is never downloaded and LFS files stay pointer files. Status checks in the
+    developer's checkout keep the filter, or real LFS files would look modified.
 """
 
 from __future__ import annotations
@@ -35,6 +38,13 @@ _ALLOWED: dict[str, tuple[str, ...] | None] = {
     "symbolic-ref": None,
     "worktree": None,
 }
+
+
+# Commands that check out or stage files. With the LFS driver's commands cleared and
+# required=false, git copies blobs as-is, so LFS pointers stay pointers.
+_WRITES_FILES = frozenset({"worktree", "restore", "add", "commit"})
+_NO_LFS = ("-c", "filter.lfs.smudge=", "-c", "filter.lfs.clean=", "-c", "filter.lfs.process=",
+           "-c", "filter.lfs.required=false")  # fmt: skip
 
 
 class GitError(RuntimeError):
@@ -80,7 +90,8 @@ class Git:
         env: Mapping[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         check_allowed(subcommand, args)
-        command = ["git", "-C", str(self.directory), "-c", f"core.hooksPath={os.devnull}", subcommand, *args]
+        lfs_off = _NO_LFS if subcommand in _WRITES_FILES else ()
+        command = ["git", "-C", str(self.directory), "-c", f"core.hooksPath={os.devnull}", *lfs_off, subcommand, *args]
         result = subprocess.run(command, capture_output=True, text=True, env=_clean_environment(env), check=False)
         if check and result.returncode != 0:
             raise GitError([subcommand, *args], result.returncode, result.stderr)

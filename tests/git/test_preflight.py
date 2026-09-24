@@ -151,9 +151,9 @@ def test_gitmodules_file_alone_is_refused(tmp_path):
     ],
     ids=["root-attributes", "nested-attributes", "lfsconfig"],
 )
-def test_lfs_is_refused(tmp_path, files):
+def test_lfs_is_allowed(tmp_path, files):
     repo = make_repo(tmp_path / "repo", {"pom.xml": POM, **files})
-    refused(repo, "Git LFS is unsupported")
+    preflight(repo)
 
 
 def test_gitattributes_without_lfs_is_fine(tmp_path):

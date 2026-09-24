@@ -99,7 +99,7 @@ def test_plan_with_rewind_commits_only_old_pom_and_runs_no_hooks(repo, cli, tmp_
     assert branch.startswith(f"giml/rewind/{base[:7]}/")
     assert git(repo, "diff", "--name-only", f"{base}..{branch}") == "pom.xml"
     assert git(repo, "log", "-1", "--format=%s", branch) == f"[giml-rewind] pom.xml from {old[:7]} (synthetic)"
-    assert f"rewound pom.xml to {old[:7]}" in out
+    assert f"rewound 1 pom.xml file(s) to {old[:7]}" in out
     assert "2.9.8" in (tmp_path / worktree / "pom.xml").read_text()
     assert not marker.exists()
     assert fingerprint(repo) == before
@@ -112,15 +112,17 @@ def test_plan_with_rewind_commits_only_old_pom_and_runs_no_hooks(repo, cli, tmp_
     [
         (lambda r: (r / "stray.txt").write_text("x"), (), ExitCode.PREFLIGHT_REFUSAL, "giml: refused: .*not clean"),
         (lambda r: git(r, "checkout", "-q", "--detach"), (), ExitCode.PREFLIGHT_REFUSAL, "HEAD is detached"),
-        (lambda r: commit_files(r, {"pom.xml": "<project><modules><module>a</module></modules></project>"}, "mm"),
-         (), ExitCode.INELIGIBLE, "giml: unsupported: .*multi-module"),
+        (lambda r: commit_files(r, {"pom.xml": "<project><modules><module>ghost</module></modules></project>"}, "mm"),
+         (), ExitCode.CONFIGURATION, "ghost/pom.xml: declared module has no pom.xml"),
+        (lambda r: commit_files(r, {"pom.xml": "<project><modules><module>../x</module></modules></project>"}, "out"),
+         (), ExitCode.INELIGIBLE, "giml: unsupported: .*module outside the project directory"),
         (lambda r: (git(r, "rm", "-q", "pom.xml"), git(r, "commit", "-q", "-m", "no pom")), (), ExitCode.CONFIGURATION,
          "no pom.xml"),
         (lambda r: None, ("--rewind-to", "nope"), ExitCode.CONFIGURATION, "does not resolve to a commit"),
         (lambda r: None, ("--rewind-to", "HEAD"), ExitCode.CONFIGURATION, "identical to the base commit's"),
         (lambda r: (git(r, "config", "--unset", "user.email")), (), ExitCode.CONFIGURATION, "user.email is not configured"),
     ],
-    ids=["dirty", "detached", "multi-module", "no-pom", "bad-rewind", "identical-rewind", "no-identity"],
+    ids=["dirty", "detached", "missing-module", "module-outside", "no-pom", "bad-rewind", "identical-rewind", "no-identity"],
 )  # fmt: skip
 def test_refusals_leave_no_trace(repo, cli, capsys, setup, args, code, message):
     setup(repo)
@@ -335,3 +337,28 @@ def test_clean_branches_continues_past_already_deleted_ones(repo, cli, capsys):
     capsys.readouterr()
     assert cli("clean", repo, "--branches") == ExitCode.SUCCESS
     assert capsys.readouterr().out.splitlines() == [f"deleted branch {second.branch}"]
+
+
+def test_lfs_content_is_never_fetched_in_giml_worktrees(tmp_path, cli, capsys):
+    marker = tmp_path / "smudge-ran"
+    repo = make_repo(tmp_path / "lfs")
+    git(repo, "config", "filter.lfs.clean", "cat")  # identity clean: the stored blob is the file
+    commit_files(repo, {"pom.xml": SINGLE_POM.format(version="1.0"), ".gitattributes": "*.bin filter=lfs\n",
+                        "demo/video.bin": "version https://git-lfs.github.com/spec/v1\npointer\n"}, "lfs")  # fmt: skip
+    commit_files(repo, {"pom.xml": SINGLE_POM.format(version="2.0")}, "bump")
+    # A required smudge filter that fails and leaves a marker, standing in for an LFS download.
+    git(repo, "config", "filter.lfs.smudge", f"sh -c 'echo ran >> {marker}; exit 1'")
+    git(repo, "config", "filter.lfs.required", "true")
+    sanity = subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", str(tmp_path / "plain")],
+                            capture_output=True)  # fmt: skip
+    assert sanity.returncode != 0 and marker.exists()  # plain git would try (and fail) to fetch
+    marker.unlink()
+    before = fingerprint(repo)
+
+    assert cli("plan", repo, "--rewind-to", "HEAD~1") == ExitCode.SUCCESS
+    worktree = output_value(capsys.readouterr().out, "worktree")
+    assert (tmp_path / worktree / "demo" / "video.bin").read_text().startswith("version https://git-lfs")
+    assert not marker.exists()
+    assert cli("clean", repo, "--branches") == ExitCode.SUCCESS
+    assert not marker.exists()
+    assert fingerprint(repo) == before

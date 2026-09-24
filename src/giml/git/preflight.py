@@ -83,18 +83,13 @@ def preflight(path: Path, allow_detached: bool = False) -> RepoState:
         more = f" (and {len(entries) - _SHOWN_DIRTY_ENTRIES} more)" if len(entries) > _SHOWN_DIRTY_ENTRIES else ""
         raise PreflightRefusal(f"{root}: working tree is not clean: {shown}{more}")
 
-    _refuse_unsupported(Git(root))
+    _refuse_submodules(Git(root))
     return RepoState(root, subdir, head.stdout.strip(), branch)
 
 
-def _refuse_unsupported(git: Git) -> None:
+def _refuse_submodules(git: Git) -> None:
     staged = git.out("ls-files", "--stage")
     if any(line.startswith("160000 ") for line in staged.splitlines()) or ".gitmodules" in git.out(
         "ls-files", "--", ".gitmodules"
     ):
         raise PreflightRefusal(f"{git.directory}: git submodules are unsupported in phase 1")
-    if git.out("ls-files", "--", ".lfsconfig"):
-        raise PreflightRefusal(f"{git.directory}: Git LFS is unsupported in phase 1")
-    for attributes in git.out("ls-files", "--", ".gitattributes", "*/.gitattributes").splitlines():
-        if "filter=lfs" in git.out("show", f"HEAD:{attributes}"):
-            raise PreflightRefusal(f"{git.directory}: Git LFS is unsupported in phase 1 ({attributes})")

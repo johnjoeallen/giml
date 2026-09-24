@@ -50,13 +50,16 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 - `scripts/selfgate.py` is giml's own quality gate (not part of the package).
 - Snapshots live in `<state>/snapshots/<source>/<UTC-ts>-<hash12>/` with `manifest.json`. OSV has a derived `index.sqlite`; Central stores only its raw `central.json` (small enough to load whole, so no index).
 - State DB: `<state>/state.db`; migrations 0001 (`snapshot`) and 0002 (`project`, `run` with only the columns used so far). Other spec §11 tables and columns arrive with their milestones.
-- `src/giml/git/` holds the git wrapper, preflight, lock, worktrees and rewind; `src/giml/workspace.py` orchestrates `plan` (M2 stub), `clean` and crashed-run detection.
+- `src/giml/git/` holds the git wrapper, preflight, lock, worktrees and rewind; `src/giml/workspace.py` orchestrates `plan` (M2 stub), `clean` and crashed-run detection. `src/giml/maven/project.py` discovers the reactor (root pom plus modules, including profile modules).
 - Platform requirements and how giml stays out of the developer's checkout: `docs/platform.md`.
 
 ## Decisions log
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-24: Multi-module reactors are in phase 1 (so ../redkite can be used); rewind restores every reactor pom.xml; M5 edits versions in the declaring module. User choice.
+- 2026-09-24: Git LFS allowed; giml disables the LFS filter on every git call so worktrees hold pointer files and nothing is downloaded. Submodules still refused. User choice.
+- 2026-09-24: Target projects must configure maven-enforcer with banDuplicateClasses (extra-enforcer-rules), banDuplicatePomDependencyVersions and dependencyConvergence; giml checks, never installs (check lands with M3 prerequisites). User instruction.
 - 2026-09-24: A tier measures test quality (unit/PIT levels) only; the CVE and best-update criteria apply identically to every tier (spec §6, §8.5). User clarification.
 - 2026-09-24: Tiers hold only unit/PIT thresholds plus max_excluded_share. Integration tests and the startup check are `verification` stages for every tier; autonomy is a separate tier->action mapping. Gate config bumped to version 3. User choice.
 - 2026-09-24: M2 `giml plan` is a stub that stops after workspace setup (stop reason `planning_not_implemented`) until M5. User choice.
@@ -64,7 +67,7 @@ Newest first. One line each: date, decision, reason.
 - 2026-09-24: Project key = `<repo name>-<sha256(repo root + subdir)[:8]>`; projects may live in a repo subdirectory.
 - 2026-09-24: Unpushed local commits are allowed; submodules and Git LFS are refused in phase 1 (spec Q3, Q4). User answer.
 - 2026-09-24: Rewind mode `plan --rewind-to <commit>` (spec §5.3): restore `pom.xml` from an ancestor commit as a marked synthetic first commit, for test/training data. Git history only, no date-based rewind. User choice.
-- 2026-09-24: Phase 1 supports single-module projects only; multi-module refused with exit 3 and deferred to a later phase. User instruction.
+- 2026-09-24: (Superseded the same day) Phase 1 was single-module only.
 - 2026-09-24: Maven builds use the developer's `~/.m2` settings and local repository; only the smoke-launched app gets a per-trial home (spec §9.2).
 - 2026-09-24: Per-version release dates come from HEAD `Last-Modified` on each version's `.pom`, cached forever (spec Q10). Search API rejected: index stale (no jackson-databind >= 2.20.0 while metadata lists 2.22.3).
 - 2026-09-24: Severity uses an in-house CVSS v3.x calculator, falling back to the OSV/GHSA label; score source recorded (spec Q11).
@@ -83,7 +86,8 @@ Project-specific traps discovered while working (tool quirks, platform differenc
 - Git worktrees share the repository config, so the developer's `user.name`/`user.email` apply to giml's commits without passing them through the environment (the wrapper scrubs `GIT_*` anyway).
 - `git for-each-ref` globs do not cross `/`; use a trailing-slash prefix (`refs/heads/giml/rewind/`) to list nested branch names. `git branch --list` marks branches checked out in another worktree with `+`.
 - A `ProjectLock` releases when garbage-collected (its file closes); hold a reference for the whole run.
-- Rewind replaces the whole `pom.xml`: on real history (chronograf) that also rewinds the project's own groupId/artifactId/name and properties, not just dependency versions.
+- Rewind replaces whole `pom.xml` files (every reactor module that existed at the rewind commit): on real history (chronograf) that also rewinds the project's own groupId/artifactId/name and properties, not just dependency versions.
+- LFS: the git wrapper clears the LFS filter (`smudge`, `clean`, `process`, `required=false`) only for `worktree`/`restore`/`add`/`commit`. Status checks in the developer's checkout must keep the filter, or real LFS files look modified against their pointer blobs. Verified on a RedKite clone: 134-byte pointer in the worktree, 169 MB real file in the checkout.
 - mutmut injects attributes into mutated classes; Protocol declarations (`core/interfaces.py`) are in `do_not_mutate` and counted as excluded by the self-gate.
 - `http.client` does not raise when a chunked read ends before Content-Length; `UrlLibFetcher.download` checks the byte count itself.
 - mutmut runs tests from a copy in `mutants/`; anything tests read outside `src/` and `tests/` must be listed in `[tool.mutmut] also_copy` (currently `config/`, `scripts/`).
