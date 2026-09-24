@@ -1,0 +1,22 @@
+# Quality tooling giml adds in its own worktree when a project lacks it (spec section 3).
+# Versions are giml's, never taken from the project. Checked against Maven Central 2026-09-24.
+jacoco:
+  groupId: org.jacoco
+  artifactId: jacoco-maven-plugin
+  version: 0.8.15
+pitest:
+  groupId: org.pitest
+  artifactId: pitest-maven
+  version: 1.30.0
+pitest_junit5:
+  groupId: org.pitest
+  artifactId: pitest-junit5-plugin
+  version: 1.2.3
+enforcer:
+  groupId: org.apache.maven.plugins
+  artifactId: maven-enforcer-plugin
+  version: 3.6.3
+extra_enforcer_rules:
+  groupId: org.codehaus.mojo
+  artifactId: extra-enforcer-rules
+  version: 1.12.1

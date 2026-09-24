@@ -27,6 +27,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "giml.store" = ["migrations/*.sql"]
+"giml.gate" = ["tooling.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
