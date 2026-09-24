@@ -57,6 +57,7 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-24: A tier measures test quality (unit/PIT levels) only; the CVE and best-update criteria apply identically to every tier (spec §6, §8.5). User clarification.
 - 2026-09-24: M2 `giml plan` is a stub that stops after workspace setup (stop reason `planning_not_implemented`) until M5. User choice.
 - 2026-09-24: giml's commits use the developer's git identity plus a `Generated-by: giml <version>` trailer; never GPG-signed. User choice (identity); signing off so runs cannot block.
 - 2026-09-24: Project key = `<repo name>-<sha256(repo root + subdir)[:8]>`; projects may live in a repo subdirectory.

@@ -9,3 +9,4 @@ htmlcov/
 mutants/
 .hypothesis/
 .pytest_cache/
+graphify-out/

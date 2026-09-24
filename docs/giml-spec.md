@@ -201,7 +201,9 @@ Rewind mode uses git history only. The developer's working tree is never touched
 
 ## 6. Tiers and quality gate
 
-Verification is only as strong as the project's tests. The **tier** determines how much autonomy the tool has and how much weight its results carry.
+Verification is only as strong as the project's tests. The **tier** is a measure of test quality (unit coverage and PIT levels) and determines how much autonomy the tool has and how much weight its results carry.
+
+A tier never changes *what* a good upgrade is. The CVE criteria (`cve_minimal` candidates, section 8.2) and the best-update ranking (section 8.5) apply identically to every tier; a higher tier cannot relax them and a lower tier cannot tighten them (confirmed 2026-09-24).
 
 ### 6.1 Central configuration (versioned)
 
@@ -373,6 +375,8 @@ A candidate state is only eligible if it passes all required verification stages
 3. Smallest diff (fewest changed declarations).
 
 Other profiles (`recency_first`, etc.) reorder these. Profiles are data in the config, not code.
+
+The objective profile is independent of the tier: every tier is held to the same CVE and best-update criteria (section 6).
 
 Every held-back or pinned dependency is **re-scanned** so a pin never silently leaves a CVE open; unresolved exposure is reported explicitly with the reason.
 
