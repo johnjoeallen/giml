@@ -25,8 +25,9 @@ These are enforced by code and tests, not just convention:
 
 ## Current status
 
-- Milestone: **M1 (Foundations) complete, awaiting review** (2026-09-24). Next: M2, Git safety.
-- Self-gate at M1: Tier B PASS (line 99.5%, branch 98.1%, test strength 94.2%, mutation coverage 94.2% of 2313 mutants, excluded share 0.9%, 0 flaky of 5 runs).
+- Milestone: **M2 (Git safety) complete, awaiting review** (2026-09-24). Next: M3, Gate assessment (needs spec Q6: which projects, and Q8: metric definitions).
+- M1 accepted 2026-09-24.
+- Self-gate at M2: Tier B PASS (line 99.6%, branch 98.6%, test strength 93.1%, mutation coverage 93.1% of 3608 mutants, excluded share 3.7%, 0 flaky of 5 runs).
 - Update this line and the log below at each checkpoint.
 
 ## Build and test commands
@@ -38,6 +39,7 @@ Record here only commands that have actually been run successfully. Verified wit
 - Slow tests: `.venv/bin/pytest -m slow` (version differential test; needs `java` and Maven 3.9.11's `lib/maven-artifact-3.9.11.jar`, found via `mvn` on PATH or `GIML_MAVEN_ARTIFACT_JAR`)
 - CLI: `.venv/bin/giml --version`
 - Self-gate (Tier B): `.venv/bin/python scripts/selfgate.py --flake-runs 5` (about 25 s; runs coverage, mutmut and 5 test runs; `--skip-mutation` for quick coverage only)
+- Workspace commands (M2): `.venv/bin/giml --state-dir <dir> plan <project> [--rewind-to <commit>]`, `giml status`, `giml clean <project> [--branches]`. Try them on a scratch `git clone` of a real project, never the original.
 - Real sync into a throwaway state dir: `.venv/bin/giml --state-dir <dir> sync --coordinate com.fasterxml.jackson.core:jackson-databind` then `.venv/bin/giml --state-dir <dir> status` (about 6 s; OSV zip about 10 MB)
 
 ## Layout
@@ -47,12 +49,17 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 - `config/gate-config.yaml` is the default gate config (spec §6.1); loaded by `giml.core.config`.
 - `scripts/selfgate.py` is giml's own quality gate (not part of the package).
 - Snapshots live in `<state>/snapshots/<source>/<UTC-ts>-<hash12>/` with `manifest.json`. OSV has a derived `index.sqlite`; Central stores only its raw `central.json` (small enough to load whole, so no index).
-- State DB: `<state>/state.db`; M1 migrations create only the `snapshot` table. Other spec §11 tables arrive with their milestones.
+- State DB: `<state>/state.db`; migrations 0001 (`snapshot`) and 0002 (`project`, `run` with only the columns used so far). Other spec §11 tables and columns arrive with their milestones.
+- `src/giml/git/` holds the git wrapper, preflight, lock, worktrees and rewind; `src/giml/workspace.py` orchestrates `plan` (M2 stub), `clean` and crashed-run detection.
+- Platform requirements and how giml stays out of the developer's checkout: `docs/platform.md`.
 
 ## Decisions log
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-24: M2 `giml plan` is a stub that stops after workspace setup (stop reason `planning_not_implemented`) until M5. User choice.
+- 2026-09-24: giml's commits use the developer's git identity plus a `Generated-by: giml <version>` trailer; never GPG-signed. User choice (identity); signing off so runs cannot block.
+- 2026-09-24: Project key = `<repo name>-<sha256(repo root + subdir)[:8]>`; projects may live in a repo subdirectory.
 - 2026-09-24: Unpushed local commits are allowed; submodules and Git LFS are refused in phase 1 (spec Q3, Q4). User answer.
 - 2026-09-24: Rewind mode `plan --rewind-to <commit>` (spec §5.3): restore `pom.xml` from an ancestor commit as a marked synthetic first commit, for test/training data. Git history only, no date-based rewind. User choice.
 - 2026-09-24: Phase 1 supports single-module projects only; multi-module refused with exit 3 and deferred to a later phase. User instruction.
@@ -71,6 +78,11 @@ Newest first. One line each: date, decision, reason.
 
 Project-specific traps discovered while working (tool quirks, platform differences, flaky areas). One line each.
 
+- Git worktrees share the repository config, so the developer's `user.name`/`user.email` apply to giml's commits without passing them through the environment (the wrapper scrubs `GIT_*` anyway).
+- `git for-each-ref` globs do not cross `/`; use a trailing-slash prefix (`refs/heads/giml/rewind/`) to list nested branch names. `git branch --list` marks branches checked out in another worktree with `+`.
+- A `ProjectLock` releases when garbage-collected (its file closes); hold a reference for the whole run.
+- Rewind replaces the whole `pom.xml`: on real history (chronograf) that also rewinds the project's own groupId/artifactId/name and properties, not just dependency versions.
+- mutmut injects attributes into mutated classes; Protocol declarations (`core/interfaces.py`) are in `do_not_mutate` and counted as excluded by the self-gate.
 - `http.client` does not raise when a chunked read ends before Content-Length; `UrlLibFetcher.download` checks the byte count itself.
 - mutmut runs tests from a copy in `mutants/`; anything tests read outside `src/` and `tests/` must be listed in `[tool.mutmut] also_copy` (currently `config/`, `scripts/`).
 - mutmut mutates string literals (PIT does not), so SQL keyword case creates equivalent mutants; SQL literals carry `# pragma: no mutate` and the self-gate counts those lines as excluded.
