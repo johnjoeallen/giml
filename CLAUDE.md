@@ -36,6 +36,7 @@ Record here only commands that have actually been run successfully. Verified wit
 - Fast tests: `.venv/bin/pytest` (Hypothesis derandomised; `HYPOTHESIS_PROFILE=explore` for a wider random search)
 - Slow tests: `.venv/bin/pytest -m slow` (version differential test; needs `java` and Maven 3.9.11's `lib/maven-artifact-3.9.11.jar`, found via `mvn` on PATH or `GIML_MAVEN_ARTIFACT_JAR`)
 - CLI: `.venv/bin/giml --version`
+- Real sync into a throwaway state dir: `.venv/bin/giml --state-dir <dir> sync --coordinate com.fasterxml.jackson.core:jackson-databind` then `.venv/bin/giml --state-dir <dir> status` (about 6 s; OSV zip about 10 MB)
 
 ## Layout
 

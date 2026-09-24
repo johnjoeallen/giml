@@ -3,11 +3,24 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import enum
+import os
+import sqlite3
 import sys
-from collections.abc import Sequence
+import zipfile
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from giml import __version__
+from giml.core.model import Coordinate, SnapshotInfo
+from giml.data import central, osv
+from giml.data.central import MetadataError
+from giml.data.http import Fetcher, FetchError, UrlLibFetcher
+from giml.data.snapshots import read_manifest
+from giml.maven.pom_coordinates import PomError, read_pom_coordinates
+from giml.store.sqlite_store import SqliteStateStore, StoreError
 
 
 class ExitCode(enum.IntEnum):
@@ -19,14 +32,135 @@ class ExitCode(enum.IntEnum):
     CONFIGURATION = 5
 
 
+class UsageError(ValueError):
+    """Invalid arguments or configuration; exits with CONFIGURATION."""
+
+
+def _utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
+
+
+@dataclass
+class Environment:
+    """Everything the CLI touches outside its arguments, injectable for tests."""
+
+    fetcher: Fetcher = field(default_factory=UrlLibFetcher)
+    clock: Callable[[], datetime.datetime] = _utc_now
+    osv_url: str = osv.OSV_MAVEN_URL
+    central_url: str = central.CENTRAL_URL
+    environ: dict[str, str] = field(default_factory=lambda: dict(os.environ))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="giml", description="Gated Increments (ML)")
     parser.add_argument("--version", action="version", version=f"giml {__version__}")
+    parser.add_argument("--state-dir", type=Path, help="state directory (default: $GIML_STATE_DIR or ~/.giml)")
+    commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+
+    sync = commands.add_parser("sync", help="fetch/refresh data snapshots (network)")
+    sync.add_argument("--osv", action="store_true", help="refresh the OSV advisory snapshot")
+    sync.add_argument("--central", action="store_true", help="refresh the Maven Central metadata snapshot")
+    sync.add_argument("path", nargs="?", type=Path, help="project directory or pom.xml whose coordinates to sync")
+    sync.add_argument("--coordinate", action="append", default=[], metavar="G:A",
+                      help="additional groupId:artifactId to sync (repeatable)")  # fmt: skip
+
+    commands.add_parser("status", help="show snapshot ages and the state directory")
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def state_dir(args: argparse.Namespace, env: Environment) -> Path:
+    if args.state_dir:
+        return args.state_dir
+    if env.environ.get("GIML_STATE_DIR"):
+        return Path(env.environ["GIML_STATE_DIR"])
+    return Path.home() / ".giml"
+
+
+def _central_coordinates(args: argparse.Namespace) -> set[Coordinate]:
+    wanted: set[Coordinate] = set()
+    if args.path:
+        pom = args.path / "pom.xml" if args.path.is_dir() else args.path
+        found = read_pom_coordinates(pom)
+        for description in found.unresolved:
+            print(f"warning: {pom}: skipped unresolvable {description}", file=sys.stderr)
+        wanted |= found.coordinates
+    for text in args.coordinate:
+        try:
+            wanted.add(Coordinate.parse(text))
+        except ValueError as exc:
+            raise UsageError(f"--coordinate: {exc}") from exc
+    return wanted
+
+
+def cmd_sync(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
+    do_osv = args.osv or not args.central
+    do_central = args.central or not args.osv
+    if (args.path or args.coordinate) and not do_central:
+        raise UsageError("a project path or --coordinate applies only to --central")
+    wanted: set[Coordinate] = set()
+    previous = store.latest_snapshot(central.SOURCE)
+    if do_central:
+        wanted = _central_coordinates(args)
+        if not wanted and previous is None:
+            raise UsageError("nothing to sync from Central: pass a project path or --coordinate")
+    if do_osv:
+        info = osv.sync(root, env.fetcher, env.clock, env.osv_url)
+        store.record_snapshot(info)
+        stats = read_manifest(info.path)["stats"]
+        print(f"osv: {info.id} ({stats['advisories']} advisories, {stats['withdrawn']} withdrawn, "
+              f"{stats['malformed']} malformed)")  # fmt: skip
+    if do_central:
+        info = central.sync(root, env.fetcher, env.clock, wanted, previous, env.central_url)
+        store.record_snapshot(info)
+        stats = read_manifest(info.path)["stats"]
+        print(f"central: {info.id} ({stats['coordinates']} coordinates, {stats['versions']} versions, "
+              f"{stats['not_found']} not found, {stats['release_dates_missing']} release dates unknown)")  # fmt: skip
+    return ExitCode.SUCCESS
+
+
+def _age(delta: datetime.timedelta) -> str:
+    seconds = max(0, int(delta.total_seconds()))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds // size}{unit} ago"
+    return "just now"
+
+
+def _describe(info: SnapshotInfo, now: datetime.datetime) -> str:
+    stats = read_manifest(info.path)["stats"]
+    counts = ", ".join(f"{k} {v}" for k, v in stats.items() if isinstance(v, int))
+    fetched = info.fetched_at.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return f"{info.id}  fetched {fetched} ({_age(now - info.fetched_at)})  hash {info.content_hash[:12]}  {counts}"
+
+
+def cmd_status(env: Environment, store: SqliteStateStore, root: Path) -> int:
+    now = env.clock()
+    print(f"state dir: {root}")
+    for source in (osv.SOURCE, central.SOURCE):
+        info = store.latest_snapshot(source)
+        if info is None:
+            print(f"{source}: no snapshot (run `giml sync --{source}`)")
+        else:
+            print(f"{source}: {_describe(info, now)}")
+    return ExitCode.SUCCESS
+
+
+def main(argv: Sequence[str] | None = None, env: Environment | None = None) -> int:
     parser = build_parser()
-    parser.parse_args(argv)
-    parser.print_help(sys.stderr)
-    return ExitCode.CONFIGURATION
+    args = parser.parse_args(argv)
+    if args.command is None:
+        parser.print_help(sys.stderr)
+        return ExitCode.CONFIGURATION
+    env = env or Environment()
+    root = state_dir(args, env)
+    try:
+        with SqliteStateStore(root / "state.db") as store:
+            if args.command == "sync":
+                return cmd_sync(args, env, store, root)
+            return cmd_status(env, store, root)
+    except (UsageError, PomError, StoreError) as exc:
+        print(f"giml: error: {exc}", file=sys.stderr)
+        return ExitCode.CONFIGURATION
+    except (FetchError, MetadataError, zipfile.BadZipFile, sqlite3.Error, OSError) as exc:
+        print(f"giml: error: {exc}", file=sys.stderr)
+        return ExitCode.INFRASTRUCTURE
