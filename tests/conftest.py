@@ -42,12 +42,17 @@ def http_server() -> Iterator[LocalHttpServer]:
                 requests.append((self.command, self.path, self.headers.get("User-Agent", "")))
             route = routes.get(self.path, Route(status=404))
             self.send_response(route.status)
-            for name, value in route.headers.items():
+            headers = dict(route.headers)
+            # X-Declared-Length lets a test announce more bytes than it sends (truncated body).
+            declared = headers.pop("X-Declared-Length", str(len(route.body)))
+            for name, value in headers.items():
                 self.send_header(name, value)
-            self.send_header("Content-Length", str(len(route.body)))
+            self.send_header("Content-Length", declared)
             self.end_headers()
             if include_body:
                 self.wfile.write(route.body)
+            if declared != str(len(route.body)):
+                self.close_connection = True
 
         def do_GET(self) -> None:  # noqa: N802 - http.server naming
             self._respond(include_body=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import email.utils
+import http.client
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -53,12 +54,18 @@ class UrlLibFetcher:
         response = self._open(url)
         if response is None:
             raise FetchError(url, "HTTP 404")
+        declared = response.headers.get("Content-Length")
+        received = 0
         try:
             with response, dest.open("wb") as out:
                 while chunk := response.read(_CHUNK):
                     out.write(chunk)
-        except OSError as exc:
-            raise FetchError(url, f"download interrupted: {exc}") from exc
+                    received += len(chunk)
+        except (OSError, http.client.HTTPException) as exc:
+            raise FetchError(url, f"download interrupted: {exc!r}") from exc
+        # http.client does not raise when a body ends early while reading in chunks.
+        if declared is not None and declared.isdigit() and received != int(declared):
+            raise FetchError(url, f"download interrupted: received {received} of {declared} bytes")
 
     def get_text(self, url: str) -> str | None:
         response = self._open(url)

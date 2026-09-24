@@ -70,3 +70,10 @@ def test_requests_identify_giml(http_server):
 )
 def test_parse_http_date(value, expected):
     assert parse_http_date(value) == expected
+
+
+def test_truncated_download_is_a_fetch_error(http_server, tmp_path):
+    # Server promises 1000 bytes and closes after 10: http.client raises IncompleteRead.
+    http_server.routes["/short.zip"] = Route(b"0123456789", headers={"X-Declared-Length": "1000"})
+    with pytest.raises(FetchError, match=r"/short.zip: download interrupted"):
+        UrlLibFetcher().download(f"{http_server.base_url}/short.zip", tmp_path / "short.zip")
