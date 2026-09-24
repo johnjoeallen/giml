@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from giml.gate.setup import (
@@ -108,6 +110,16 @@ def test_setup_adds_everything_to_the_root_only_and_commits(reactor_worktree):
 
     again = apply_setup(worktree, discover_reactor(worktree))
     assert again.commit is None and again.changed_files == [] and len(again.kept) == 3
+
+
+def test_added_pit_skips_integration_tests(reactor_worktree):
+    # Tiers measure unit tests; Surefire skips Failsafe-named tests, so PIT must too, or a *IT that
+    # needs a packaged artifact fails PIT's green-suite check (found on arete).
+    _, _, worktree = reactor_worktree
+    apply_setup(worktree, discover_reactor(worktree))
+    text = (worktree / "pom.xml").read_text()
+    block = text[text.index("<excludedTestClasses>"):text.index("</excludedTestClasses>")]
+    assert re.findall(r"<param>([^<]+)</param>", block) == ["*.IT*", "*IT", "*ITCase"]
 
 
 def test_setup_output_is_readable_xml_with_matching_indentation(reactor_worktree):

@@ -131,8 +131,16 @@ def _jacoco_block(p: Plugin) -> str:
 </plugin>"""
 
 
+# PIT globs for Failsafe's default integration-test names (IT*, *IT, *ITCase). Tiers measure unit
+# tests, and Surefire skips these, so PIT must too: an IT may need a packaged artifact.
+PIT_EXCLUDED_TESTS = ("*.IT*", "*IT", "*ITCase")
+
+
+def _params(values: list[str] | tuple[str, ...]) -> str:
+    return "\n".join(f"\t\t\t<param>{v}</param>" for v in values)
+
+
 def _pitest_block(p: Plugin, targets: list[str], junit5: Plugin | None) -> str:
-    params = "\n".join(f"\t\t\t<param>{t}</param>" for t in targets)
     dependencies = ""
     if junit5 is not None:
         dependencies = f"""
@@ -149,8 +157,11 @@ def _pitest_block(p: Plugin, targets: list[str], junit5: Plugin | None) -> str:
 \t<version>{p.version}</version>
 \t<configuration>
 \t\t<targetClasses>
-{params}
+{_params(targets)}
 \t\t</targetClasses>
+\t\t<excludedTestClasses>
+{_params(PIT_EXCLUDED_TESTS)}
+\t\t</excludedTestClasses>
 \t\t<outputFormats>
 \t\t\t<outputFormat>XML</outputFormat>
 \t\t\t<outputFormat>HTML</outputFormat>
