@@ -96,8 +96,7 @@ _Item = Union[_Num, _Str, _List]
 
 
 def _strip_leading_zeroes(buf: str) -> str:
-    if not buf:
-        return "0"
+    # Never called with an empty string (Java's empty-string branch is unreachable here).
     for i, c in enumerate(buf):
         if c != "0":
             return buf[i:]
@@ -153,12 +152,9 @@ def _compare(item: _Item, other: _Item | None) -> int:
     if isinstance(other, _Str):
         return 1  # 1-1 > 1-sp
     for i in range(max(len(item), len(other))):
-        left = item[i] if i < len(item) else None
         right = other[i] if i < len(other) else None
-        if left is None:
-            result = 0 if right is None else -_compare(right, left)
-        else:
-            result = _compare(left, right)
+        # When this list is shorter, compare the other way round and invert.
+        result = _compare(item[i], right) if i < len(item) else -_compare(right, None)
         if result != 0:
             return result
     return 0

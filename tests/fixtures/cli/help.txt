@@ -1,0 +1,14 @@
+usage: giml [-h] [--version] [--state-dir STATE_DIR] COMMAND ...
+
+Gated Increments (ML)
+
+positional arguments:
+  COMMAND
+    sync                fetch/refresh data snapshots (network)
+    status              show snapshot ages and the state directory
+
+options:
+  -h, --help            show this help message and exit
+  --version             show program's version number and exit
+  --state-dir STATE_DIR
+                        state directory (default: $GIML_STATE_DIR or ~/.giml)

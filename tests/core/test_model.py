@@ -40,3 +40,8 @@ def test_rating_from_label(label, rating):
 
 def test_ratings_order_worst_last():
     assert max(SeverityRating.LOW, SeverityRating.CRITICAL, SeverityRating.UNKNOWN) is SeverityRating.CRITICAL
+
+
+def test_invalid_coordinate_part_is_named():
+    with pytest.raises(ValueError, match=r"invalid Maven coordinate part 'a b'"):
+        Coordinate("a b", "c")

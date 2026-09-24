@@ -1,11 +1,15 @@
 import datetime
+import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from giml import __version__
 from giml.cli import Environment, ExitCode, main
+from giml.core.model import SnapshotInfo
 from giml.data import central
 from giml.data.http import UrlLibFetcher
 from giml.data.snapshots import read_manifest
@@ -166,3 +170,87 @@ def test_corrupt_download_exits_4(served, tmp_path, capsys):
     server.routes["/osv/Maven/all.zip"] = Route(b"not a zip")
     assert main(["--state-dir", str(tmp_path / "s"), "sync", "--osv"], env) == ExitCode.INFRASTRUCTURE
     assert "giml: error:" in capsys.readouterr().err
+
+
+# --- Help text, formatting and wiring ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(("args", "golden"), [(["--help"], "help.txt"), (["sync", "--help"], "sync-help.txt")])
+def test_help_output_matches_golden_file(monkeypatch, capsys, args, golden):
+    # argparse wraps to the terminal width; pin it so the golden file is stable.
+    monkeypatch.setenv("COLUMNS", "100")
+    with pytest.raises(SystemExit):
+        main(args)
+    assert capsys.readouterr().out == (FIXTURES / "cli" / golden).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [(-5, "just now"), (0, "just now"), (59, "just now"), (60, "1m ago"), (3599, "59m ago"),
+     (3600, "1h ago"), (86399, "23h ago"), (86400, "1d ago"), (3 * 86400 + 5, "3d ago")],
+)  # fmt: skip
+def test_age_thresholds(seconds, text):
+    from giml.cli import _age
+
+    assert _age(datetime.timedelta(seconds=seconds)) == text
+
+
+def test_status_line_format_is_exact(tmp_path, capsys):
+    info = SnapshotInfo("osv-x", "osv", NOW, "0123456789abcdef" * 4, tmp_path)
+    (tmp_path / "manifest.json").write_text(json.dumps({"stats": {"advisories": 5, "withdrawn": 1, "malformed_files": []}}))
+    with SqliteStateStore(tmp_path / "state.db") as store:
+        store.record_snapshot(info)
+    env = Environment(clock=lambda: NOW + datetime.timedelta(minutes=2), environ={})
+    assert main(["--state-dir", str(tmp_path), "status"], env) == ExitCode.SUCCESS
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1] == "osv: osv-x  fetched 2026-09-24T12:00:00Z (2m ago)  hash 0123456789ab  advisories 5, withdrawn 1"
+
+
+def test_exact_usage_error_lines(tmp_path, capsys):
+    env = Environment(clock=lambda: NOW, environ={})
+    main(["--state-dir", str(tmp_path), "sync", "--osv", "a"], env)
+    main(["--state-dir", str(tmp_path), "sync", "--central"], env)
+    assert capsys.readouterr().err.splitlines() == [
+        "giml: error: a project path or --coordinate applies only to --central",
+        "giml: error: nothing to sync from Central: pass a project path or --coordinate",
+    ]
+
+
+def test_path_may_name_the_pom_file_and_combines_with_coordinates(served, tmp_path, capsys):
+    env, _, server = served
+    pom = tmp_path / "custom-pom.xml"
+    pom.write_text("<project><dependencies><dependency><groupId>org.a</groupId><artifactId>b</artifactId>"
+                   "</dependency></dependencies></project>")  # fmt: skip
+    args = ["--state-dir", str(tmp_path / "s"), "sync", "--central", str(pom), "--coordinate", "ch.qos.logback:logback-core"]
+    assert main(args, env) == ExitCode.SUCCESS
+    requested = {path for method, path, _ in server.requests if method == "GET"}
+    assert {"/maven2/org/a/b/maven-metadata.xml", "/maven2/ch/qos/logback/logback-core/maven-metadata.xml"} <= requested
+
+
+def test_default_clock_is_timezone_aware_utc():
+    from giml.cli import _utc_now
+
+    assert _utc_now().utcoffset() == datetime.timedelta(0)
+
+
+def test_python_dash_m_runs_the_cli():
+    result = subprocess.run([sys.executable, "-m", "giml", "--version"], capture_output=True, text=True, check=True)
+    assert result.stdout.strip() == f"giml {__version__}"
+
+
+def test_m1_implementations_provide_their_interfaces():
+    from giml.core import interfaces
+    from giml.data.central import LocalCentralMetadataSource
+    from giml.data.osv import LocalOsvAdvisorySource
+    from giml.store.result_cache import FileResultCache
+
+    pairs = [
+        (interfaces.StateStore, SqliteStateStore),
+        (interfaces.ResultCache, FileResultCache),
+        (interfaces.AdvisorySource, LocalOsvAdvisorySource),
+        (interfaces.ArtifactMetadataSource, LocalCentralMetadataSource),
+    ]
+    for protocol, implementation in pairs:
+        members = {name for name in vars(protocol) if not name.startswith("_")}
+        assert members, protocol
+        assert members <= set(dir(implementation)), (protocol.__name__, members - set(dir(implementation)))

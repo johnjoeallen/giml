@@ -188,3 +188,45 @@ def test_maven_ordering_has_cycles_on_degenerate_input():
     assert_ordered("", "A")
     assert_ordered("A", "0A0")
     assert_ordered("0A0", "")
+
+
+# Edge cases below were checked against maven-artifact-3.9.11.jar's main().
+
+
+@pytest.mark.parametrize(
+    ("low", "high"),
+    [
+        ("1.999999999.1", "1.0000000000.1"),  # 9 digits is an int, 10 a long: long always ranks higher
+        ("1.999999999999999999.1", "1.0000000000000000000.1"),  # 18 digits long, 19 BigInteger
+        ("1-\U00010000", "1-\uef00"),  # UTF-16 order: surrogates (D800) sort below EF00
+    ],
+)
+def test_maven_type_and_utf16_ordering_quirks(low, high):
+    assert_ordered(low, high)
+
+
+def test_long_zero_run_has_plain_canonical_form_but_ranks_by_type():
+    assert ComparableVersion("1.0000000000.1").canonical == "1.0.1"
+    assert ComparableVersion("1.0000000000.1") != ComparableVersion("1.0.1")
+
+
+@pytest.mark.parametrize(
+    ("v1", "v2"),
+    [("1..1", "1.0.1"), (".1", "0.1"), ("1.", "1"), ("1-", "1"), ("1x1", "1-x-1"), ("1-x1", "1x-1")],
+)
+def test_separator_and_shorthand_edge_cases(v1, v2):
+    assert_equal(v1, v2)
+
+
+def test_lone_surrogate_does_not_break_comparison():
+    assert ComparableVersion("1-\ud800").compare_to(ComparableVersion("1-a")) == 1
+
+
+@given(version_text, version_text)
+def test_compare_to_returns_exactly_minus_one_zero_or_one(a, b):
+    assert ComparableVersion(a).compare_to(ComparableVersion(b)) in (-1, 0, 1)
+
+
+def test_distinct_versions_hash_differently():
+    versions = ["1", "1.1", "1-rc", "2", "1-sp", "1.0.1", "10"]
+    assert len({hash(ComparableVersion(v)) for v in versions}) == len(versions)

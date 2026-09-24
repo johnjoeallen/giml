@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from giml import __version__
 from giml.data.snapshots import SnapshotWriter, read_manifest, sha256_file
 
 FETCHED = datetime.datetime(2026, 9, 24, 10, 30, 5, tzinfo=datetime.UTC)
@@ -66,3 +67,42 @@ def test_sha256_file(tmp_path):
     path = tmp_path / "f"
     path.write_bytes(b"abc")
     assert sha256_file(path) == hashlib.sha256(b"abc").hexdigest()
+
+
+def test_in_progress_snapshot_is_hidden_next_to_its_final_location(tmp_path):
+    with SnapshotWriter(tmp_path, "osv") as writer:
+        assert writer.path.parent == tmp_path / "snapshots" / "osv"
+        assert writer.path.name.startswith(".tmp-")
+        writer.add_raw("all.zip").write_bytes(b"data")
+        info = writer.commit(FETCHED, ["u"], {"n": 1})
+        assert writer.path == info.path
+
+
+def test_manifest_is_complete_and_stably_formatted(tmp_path):
+    info = write_snapshot(tmp_path)
+    manifest = read_manifest(info.path)
+    assert manifest == {
+        "id": info.id,
+        "source": "osv",
+        "fetched_at": "2026-09-24T10:30:05+00:00",
+        "sources": ["https://example.invalid/all.zip"],
+        "files": {"all.zip": hashlib.sha256(b"data").hexdigest()},
+        "content_hash": info.content_hash,
+        "stats": {"advisories": 3},
+        "giml_version": __version__,
+    }
+    text = (info.path / "manifest.json").read_text(encoding="utf-8")
+    assert text == json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+
+
+def test_existing_snapshot_error_names_directory(tmp_path):
+    info = write_snapshot(tmp_path)
+    with pytest.raises(FileExistsError, match=f"snapshot directory already exists: {info.path}"):
+        write_snapshot(tmp_path)
+
+
+def test_sha256_of_multi_chunk_file(tmp_path):
+    payload = bytes(range(256)) * 1000
+    path = tmp_path / "big"
+    path.write_bytes(payload)
+    assert sha256_file(path) == hashlib.sha256(payload).hexdigest()

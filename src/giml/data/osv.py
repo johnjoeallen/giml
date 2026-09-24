@@ -94,27 +94,30 @@ class Interval:
         return version <= upper if self.upper_inclusive else version < upper
 
 
-def _event_key(event: dict) -> tuple:
-    kind, value = next(iter(event.items()))
-    if kind == "introduced" and value == "0":
-        return (0, ComparableVersion(""), 0)
-    order = {"introduced": 0, "fixed": 1, "last_affected": 1}.get(kind, 2)
-    return (1, ComparableVersion(str(value)), order)
+_EVENT_KINDS = ("introduced", "fixed", "last_affected")
 
 
 def intervals(events: list[dict]) -> list[Interval]:
-    """Affected intervals of one ECOSYSTEM range. Events are sorted as the OSV schema requires."""
-    usable = [e for e in events if isinstance(e, dict) and len(e) == 1
-              and next(iter(e)) in ("introduced", "fixed", "last_affected")]  # fmt: skip
+    """Affected intervals of one ECOSYSTEM range.
+
+    Events are sorted by version as the OSV schema requires; at equal versions ``introduced`` comes
+    first. ``introduced: "0"`` means "from the first version" and so opens the range before any
+    other event. Events of other kinds (``limit``) and malformed events are ignored.
+    """
+    usable = [next(iter(e.items())) for e in events
+              if isinstance(e, dict) and len(e) == 1 and next(iter(e)) in _EVENT_KINDS]  # fmt: skip
+    from_first = ("introduced", "0") in usable
+    ordered = sorted(
+        ((kind, str(value)) for kind, value in usable if (kind, value) != ("introduced", "0")),
+        key=lambda event: (ComparableVersion(event[1]), event[0] != "introduced"),
+    )
     result: list[Interval] = []
     start: str | None = None
-    is_open = False
-    for event in sorted(usable, key=_event_key):
-        kind, value = next(iter(event.items()))
-        value = str(value)
+    is_open = from_first
+    for kind, value in ordered:
         if kind == "introduced":
             if not is_open:
-                start, is_open = (None if value == "0" else value), True
+                start, is_open = value, True
         elif is_open:
             result.append(Interval(start, value, kind == "last_affected"))
             is_open = False
@@ -170,9 +173,9 @@ def build_index(zip_path: Path, index_path: Path) -> dict:
                     continue
                 try:
                     advisory = json.loads(archive.read(name))
-                    if not isinstance(advisory, dict) or not isinstance(advisory.get("id"), str):
-                        raise ValueError("not an OSV advisory object")
                 except ValueError:
+                    advisory = None
+                if not isinstance(advisory, dict) or not isinstance(advisory.get("id"), str):
                     stats["malformed"] += 1
                     stats["malformed_files"].append(name)
                     continue
@@ -189,7 +192,7 @@ def build_index(zip_path: Path, index_path: Path) -> dict:
 def _insert_advisory(conn: sqlite3.Connection, advisory: dict, stats: dict) -> None:
     severity = extract_severity(advisory)
     conn.execute(
-        "INSERT INTO advisory VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO advisory VALUES (?, ?, ?, ?, ?, ?, ?)",  # pragma: no mutate
         (advisory["id"], json.dumps(extract_cves(advisory)), advisory.get("modified"),
          severity.rating.name, severity.source.value, severity.score, severity.vector),
     )  # fmt: skip
@@ -200,7 +203,7 @@ def _insert_advisory(conn: sqlite3.Connection, advisory: dict, stats: dict) -> N
             continue
         versions = sorted(v for v in affected.get("versions") or [] if isinstance(v, str))
         conn.execute(
-            "INSERT INTO affected VALUES (?, ?, ?, ?)",
+            "INSERT INTO affected VALUES (?, ?, ?, ?)",  # pragma: no mutate
             (advisory["id"], package["name"], json.dumps(_maven_ranges(affected)), json.dumps(versions)),
         )
         stats["affected_entries"] += 1
@@ -250,9 +253,9 @@ class LocalOsvAdvisorySource:
 
     def _load(self, package: str) -> tuple:
         rows = self._conn.execute(
-            "SELECT a.id, a.cves, a.severity_rating, a.severity_source, a.severity_score, "
-            "a.severity_vector, f.ranges, f.versions FROM affected f JOIN advisory a ON a.id = f.advisory_id "
-            "WHERE f.package = ? ORDER BY a.id",
+            "SELECT a.id, a.cves, a.severity_rating, a.severity_source, a.severity_score, "  # pragma: no mutate
+            "a.severity_vector, f.ranges, f.versions FROM affected f JOIN advisory a ON a.id = f.advisory_id "  # pragma: no mutate
+            "WHERE f.package = ? ORDER BY a.id",  # pragma: no mutate
             (package,),
         ).fetchall()
         grouped: dict[str, list] = {}

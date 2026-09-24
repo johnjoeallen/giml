@@ -280,3 +280,82 @@ def test_sync_failure_leaves_no_snapshot(tmp_path):
     with pytest.raises(RuntimeError):
         osv.sync(tmp_path, Failing(), lambda: FETCHED)
     assert list((tmp_path / "snapshots" / "osv").iterdir()) == []
+
+
+# --- Added from mutation-testing review --------------------------------------------------------
+
+
+def test_invalid_vector_before_valid_one_is_skipped_not_fatal():
+    severity = extract_severity({"severity": [
+        {"type": "CVSS_V3", "score": "CVSS:3.1/garbage"},
+        {"type": "CVSS_V3"},
+        {"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"},
+    ]})  # fmt: skip
+    assert (severity.source, severity.score) == (SeveritySource.CVSS_V3, 7.5)
+
+
+def test_cve_id_is_used_even_when_not_an_alias():
+    assert extract_cves({"id": "CVE-2021-1", "aliases": ["GHSA-a"]}) == ["CVE-2021-1"]
+
+
+def test_open_ended_range_matches_every_later_version(tmp_path):
+    source, _ = source_for(tmp_path, [advisory("GHSA-x", "g:a", [[{"introduced": "3.0"}]])])
+    target = Coordinate("g", "a")
+    [hit] = source.affecting(target, "99.0")
+    assert (hit.introduced, hit.fixed) == ("3.0", None)
+    assert source.affecting(target, "2.9") == []
+
+
+def test_introduced_zero_opens_before_any_version_regardless_of_position():
+    # "0-alpha" sorts below the empty version, so "0" must be handled before sorting.
+    events = [{"introduced": "1.0"}, {"fixed": "2.0"}, {"fixed": "0-alpha"}, {"introduced": "0"}]
+    assert intervals(events) == [Interval(None, "0-alpha", False), Interval("1.0", "2.0", False)]
+
+
+def test_introduced_sorts_before_fixed_at_the_same_version():
+    assert intervals([{"fixed": "1.0"}, {"introduced": "1.0"}]) == [Interval("1.0", "1.0", False)]
+
+
+def test_last_affected_closes_inclusively():
+    assert intervals([{"introduced": "0"}, {"last_affected": "2.0"}]) == [Interval(None, "2.0", True)]
+
+
+def test_combined_bounds_use_maven_order_not_string_order(tmp_path):
+    adv = advisory("GHSA-x", "g:a", [[{"introduced": "1.9"}, {"fixed": "1.10"}], [{"introduced": "1.10-rc1"}, {"fixed": "1.9.5"}]])
+    adv["affected"][0]["ranges"].append({"type": "ECOSYSTEM", "events": [{"introduced": "1.9.1"}, {"fixed": "1.11"}]})
+    source, _ = source_for(tmp_path, [adv])
+    [hit] = source.affecting(Coordinate("g", "a"), "1.9.2")
+    # String order would pick "1.10" as lowest introduced and "1.9.5" as highest fixed.
+    assert (hit.introduced, hit.fixed) == ("1.9", "1.11")
+
+
+def test_non_maven_entry_before_maven_entry_does_not_hide_it(tmp_path):
+    adv = {
+        "id": "GHSA-x",
+        "affected": [
+            {"package": {"name": "g:a", "ecosystem": "PyPI"}, "ranges": []},
+            {"package": {"ecosystem": "Maven"}},
+            {"package": {"name": "g:a", "ecosystem": "Maven"},
+             "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}]}]},
+        ],
+    }  # fmt: skip
+    source, stats = source_for(tmp_path, [adv])
+    assert ids(source.affecting(Coordinate("g", "a"), "1.0")) == {"GHSA-x"}
+    assert stats["affected_entries"] == 1
+
+
+def test_ingest_counts_are_exact(tmp_path):
+    gone = [advisory(f"GHSA-gone-{i}", "g:a", [[{"introduced": "0"}]], withdrawn="2025-01-01T00:00:00Z") for i in range(2)]
+    _, stats = source_for(tmp_path, logback_advisories() + gone)
+    assert stats["withdrawn"] == 2
+    assert stats["affected_entries"] == 21  # every Maven affected entry in the fixture, counted independently
+
+
+def test_index_stores_modified_time_and_severity_details(tmp_path):
+    adv = advisory("GHSA-x", "g:a", [[{"introduced": "0"}]], modified="2026-01-02T03:04:05Z",
+                   severity=[{"type": "CVSS_V3", "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}])  # fmt: skip
+    source, _ = source_for(tmp_path, [adv])
+    row = source._conn.execute("SELECT modified, severity_score FROM advisory").fetchone()
+    assert row == ("2026-01-02T03:04:05Z", 9.8)
+    [hit] = source.affecting(Coordinate("g", "a"), "1.0")
+    assert (hit.severity.score, hit.severity.vector) == (9.8, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")

@@ -98,3 +98,12 @@ def test_naive_timestamps_are_rejected(tmp_path):
     naive = SnapshotInfo("x", "osv", datetime.datetime(2026, 9, 24), "00", Path("/x"))
     with SqliteStateStore(tmp_path / "state.db") as store, pytest.raises(ValueError, match="timezone"):
         store.record_snapshot(naive)
+
+
+def test_packaged_migration_names_match_files():
+    assert packaged_migrations()[0].name == "0001_snapshot.sql"
+
+
+def test_state_directory_is_created_with_parents(tmp_path):
+    with SqliteStateStore(tmp_path / "a" / "b" / "state.db") as store:
+        assert store.schema_version >= 1

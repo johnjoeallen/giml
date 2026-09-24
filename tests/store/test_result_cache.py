@@ -69,3 +69,14 @@ def test_malformed_keys_are_rejected(tmp_path, key):
 
 def test_canonical_json_is_compact_and_sorted():
     assert canonical_json({"b": [1, {"d": 1, "c": 2}], "a": "é"}) == '{"a":"é","b":[1,{"c":2,"d":1}]}'
+
+
+def test_counters_accumulate_and_cache_root_is_created(tmp_path):
+    cache = FileResultCache(tmp_path / "not" / "yet" / "there")
+    keys = [cache.key({"n": n}) for n in range(2)]
+    for key in keys:
+        assert cache.get(key) is None
+        cache.put(key, {"n": 1})
+        assert cache.get(key) == {"n": 1}
+    assert cache.get(keys[0]) == {"n": 1}
+    assert (cache.hits, cache.misses) == (3, 2)

@@ -151,3 +151,44 @@ def test_load_names_the_file_on_error(tmp_path):
 def test_load_reports_unreadable_file(tmp_path):
     with pytest.raises(ConfigError, match="cannot read"):
         load_gate_config(tmp_path / "missing.yaml")
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value"),
+    [
+        (("planning",), "release_cooldown_days", 0),
+        (("planning",), "max_builds", 1),
+        (("planning",), "max_wall_minutes", 1),
+        (("shared",), "flake_check_runs", 1),
+        (("shared",), "max_result_age_days", 1),
+        (("tiers", "B"), "unit_line_coverage", 0),
+        (("tiers", "B"), "unit_line_coverage", 100),
+        (("tiers", "B"), "max_excluded_share", 99.5),
+    ],
+)
+def test_boundary_values_are_accepted(section, key, value):
+    data = default_data()
+    target = data
+    for part in section:
+        target = target[part]
+    target[key] = value
+    config = parse(data)
+    holder = config.tiers["B"] if section[0] == "tiers" else getattr(config, section[0])
+    assert getattr(holder, key) == value
+
+
+def test_all_unknown_keys_are_listed_sorted():
+    data = default_data()
+    data["planning"]["zeta"] = 1
+    data["planning"]["alpha"] = 2
+    with pytest.raises(ConfigError) as exc:
+        parse(data)
+    assert str(exc.value) == "planning: unknown key(s): alpha, zeta"
+
+
+def test_empty_tiers_message_is_exact():
+    data = default_data()
+    data["tiers"] = {}
+    with pytest.raises(ConfigError) as exc:
+        parse(data)
+    assert str(exc.value) == "tiers: expected a non-empty mapping of tier name to thresholds"

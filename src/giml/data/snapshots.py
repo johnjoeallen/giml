@@ -21,11 +21,8 @@ MANIFEST = "manifest.json"
 
 
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 16), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 class SnapshotWriter:
@@ -35,6 +32,8 @@ class SnapshotWriter:
         self.source = source
         self.parent = state_dir / "snapshots" / source
         self.parent.mkdir(parents=True, exist_ok=True)
+        # Same directory as the final snapshot so the publishing rename is atomic; the dot prefix
+        # keeps in-progress snapshots out of listings.
         self.path = Path(tempfile.mkdtemp(dir=self.parent, prefix=".tmp-"))
         self._raw: set[str] = set()
         self._committed = False

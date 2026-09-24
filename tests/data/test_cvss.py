@@ -1,9 +1,10 @@
+import itertools
 import json
 from pathlib import Path
 
 import pytest
 
-from giml.data.cvss import CvssError, base_score, parse_vector
+from giml.data.cvss import CvssError, base_score, parse_vector, roundup
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "cvss" / "first-examples.json"
 EXAMPLES = json.loads(FIXTURE.read_text(encoding="utf-8"))["examples"]
@@ -37,13 +38,22 @@ def test_score_carries_version_and_trimmed_vector():
     assert (result.version, result.vector) == ("3.0", "CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
 
 
-def test_v31_roundup_avoids_floating_point_error():
-    # 4.0000001-style inputs must not round up to 4.1 (spec 3.1 Appendix A).
-    from giml.data.cvss import _roundup_v31
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(4.0, 4.0), (4.000002, 4.0), (4.00001, 4.1), (4.0003, 4.1), (4.02, 4.1), (4.09, 4.1), (0.0, 0.0), (9.95, 10.0)],
+)
+def test_roundup_is_integer_safe(value, expected):
+    # Spec 3.1 Appendix A: 4.000002 must not become 4.1 through float error.
+    assert roundup(value) == expected
 
-    assert _roundup_v31(4.000002) == 4.0
-    assert _roundup_v31(4.02) == 4.1
-    assert _roundup_v31(4.0) == 4.0
+
+def test_v30_and_v31_give_identical_base_scores_for_every_vector():
+    # Justifies using one Roundup for both versions: exhaustive over all 2592 base vectors.
+    for values in itertools.product("NALP", "LH", "NLH", "NR", "UC", "HLN", "HLN", "HLN"):
+        metrics = "/".join(f"{k}:{v}" for k, v in zip(("AV", "AC", "PR", "UI", "S", "C", "I", "A"), values, strict=True))
+        v30 = base_score(f"CVSS:3.0/{metrics}")
+        assert base_score(f"CVSS:3.1/{metrics}").base_score == v30.base_score
+        assert 0.0 <= v30.base_score <= 10.0
 
 
 @pytest.mark.parametrize(
@@ -57,6 +67,8 @@ def test_v31_roundup_avoids_floating_point_error():
         ("CVSS:3.1/AV:X/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", "invalid value AV:X"),
         ("CVSS:3.1/AV:N/AC:L/PR:X/UI:N/S:U/C:H/I:H/A:H", "invalid value PR:X"),
         ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:X/C:H/I:H/A:H", "invalid value S:X"),
+        ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:U/I:H/A:H", "invalid value C:U"),
+        ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:C", "invalid value A:C"),
         ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H/", "malformed metric ''"),
         ("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:Hx", "malformed metric"),
     ],

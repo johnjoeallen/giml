@@ -38,8 +38,8 @@ def _child(element: ET.Element | None, name: str) -> ET.Element | None:
     return next((c for c in element if _local(c.tag) == name), None)
 
 
-def _children(element: ET.Element | None, *path: str) -> list[ET.Element]:
-    nodes = [element] if element is not None else []
+def _children(element: ET.Element, *path: str) -> list[ET.Element]:
+    nodes = [element]
     for name in path:
         nodes = [c for n in nodes for c in n if _local(c.tag) == name]
     return nodes
@@ -48,6 +48,10 @@ def _children(element: ET.Element | None, *path: str) -> list[ET.Element]:
 def _text(element: ET.Element | None, name: str) -> str | None:
     child = _child(element, name)
     return child.text.strip() if child is not None and child.text else None
+
+
+class _Unresolved(Exception):
+    """A ``${...}`` reference with no value, or a reference cycle."""
 
 
 class _Interpolator:
@@ -73,16 +77,14 @@ class _Interpolator:
         def substitute(match: re.Match) -> str:
             name = match.group(1)
             value = self.values.get(name)
-            if value is None or name in seen:
-                raise KeyError(name)
-            resolved = self.resolve(value, seen | {name})
+            resolved = None if value is None or name in seen else self.resolve(value, seen | {name})
             if resolved is None:
-                raise KeyError(name)
+                raise _Unresolved
             return resolved
 
         try:
             return _PROPERTY.sub(substitute, text)
-        except KeyError:
+        except _Unresolved:
             return None
 
 
@@ -102,11 +104,11 @@ def read_pom_coordinates(pom: Path) -> PomCoordinates:
         raw_artifact = _text(element, "artifactId")
         group, artifact = interpolate.resolve(raw_group), interpolate.resolve(raw_artifact)
         try:
-            if group is None or artifact is None:
-                raise ValueError("unresolved")
-            result.coordinates.add(Coordinate(group, artifact))
+            coordinate = Coordinate(group or "", artifact or "")
         except ValueError:
             result.unresolved.append(f"{kind} {raw_group}:{raw_artifact}")
+            return
+        result.coordinates.add(coordinate)
 
     parent = _child(root, "parent")
     if parent is not None:

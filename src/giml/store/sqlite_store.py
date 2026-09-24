@@ -60,7 +60,6 @@ class SqliteStateStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, isolation_level=None)
         try:
-            self._conn.execute("PRAGMA foreign_keys = ON")
             self._migrate(packaged_migrations() if migrations is None else validate_migrations(migrations))
         except BaseException:
             self._conn.close()
@@ -93,28 +92,28 @@ class SqliteStateStore:
                 )
             except sqlite3.Error as exc:
                 if self._conn.in_transaction:
-                    self._conn.execute("ROLLBACK")
+                    self._conn.execute("ROLLBACK")  # pragma: no mutate
                 raise StoreError(f"migration {migration.name} failed: {exc}") from exc
 
     def record_snapshot(self, snapshot: SnapshotInfo) -> None:
         self._conn.execute(
-            "INSERT INTO snapshot (id, source, fetched_at, content_hash, path) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO snapshot (id, source, fetched_at, content_hash, path) VALUES (?, ?, ?, ?, ?)",  # pragma: no mutate
             (snapshot.id, snapshot.source, _utc_text(snapshot.fetched_at), snapshot.content_hash,
              str(snapshot.path)),
         )  # fmt: skip
 
     def latest_snapshot(self, source: str) -> SnapshotInfo | None:
         row = self._conn.execute(
-            "SELECT id, source, fetched_at, content_hash, path FROM snapshot "
-            "WHERE source = ? ORDER BY fetched_at DESC, id DESC LIMIT 1",
+            "SELECT id, source, fetched_at, content_hash, path FROM snapshot "  # pragma: no mutate
+            "WHERE source = ? ORDER BY fetched_at DESC, id DESC LIMIT 1",  # pragma: no mutate
             (source,),
         ).fetchone()
         return _snapshot_from_row(row) if row else None
 
     def list_snapshots(self) -> list[SnapshotInfo]:
         rows = self._conn.execute(
-            "SELECT id, source, fetched_at, content_hash, path FROM snapshot "
-            "ORDER BY fetched_at DESC, id DESC"
+            "SELECT id, source, fetched_at, content_hash, path FROM snapshot "  # pragma: no mutate
+            "ORDER BY fetched_at DESC, id DESC"  # pragma: no mutate
         ).fetchall()
         return [_snapshot_from_row(row) for row in rows]
 

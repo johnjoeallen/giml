@@ -1,0 +1,10 @@
+usage: giml sync [-h] [--osv] [--central] [--coordinate G:A] [path]
+
+positional arguments:
+  path              project directory or pom.xml whose coordinates to sync
+
+options:
+  -h, --help        show this help message and exit
+  --osv             refresh the OSV advisory snapshot
+  --central         refresh the Maven Central metadata snapshot
+  --coordinate G:A  additional groupId:artifactId to sync (repeatable)

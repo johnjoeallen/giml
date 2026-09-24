@@ -64,3 +64,45 @@ def test_invalid_poms_are_rejected(tmp_path, content, message):
 def test_missing_file_is_rejected(tmp_path):
     with pytest.raises(PomError, match="cannot parse"):
         read_pom_coordinates(tmp_path / "pom.xml")
+
+
+def write_pom(tmp_path, body: str) -> Path:
+    pom = tmp_path / "pom.xml"
+    pom.write_text(f'<project xmlns="http://maven.apache.org/POM/4.0.0">{body}</project>')
+    return pom
+
+
+def test_every_supported_builtin_property(tmp_path):
+    pom = write_pom(tmp_path, """
+        <parent><groupId>org.parent</groupId><artifactId>parent-pom</artifactId></parent>
+        <groupId>org.own</groupId><artifactId>own</artifactId>
+        <properties><empty/></properties>
+        <dependencies>
+          <dependency><groupId>${pom.groupId}</groupId><artifactId>a</artifactId></dependency>
+          <dependency><groupId>${groupId}</groupId><artifactId>b</artifactId></dependency>
+          <dependency><groupId>x${empty}</groupId><artifactId>${project.artifactId}-c</artifactId></dependency>
+          <dependency><groupId>${project.parent.groupId}</groupId><artifactId>${project.parent.artifactId}-d</artifactId></dependency>
+        </dependencies>""")
+    assert sorted(str(c) for c in read_pom_coordinates(pom).coordinates) == [
+        "org.own:a", "org.own:b", "org.parent:parent-pom", "org.parent:parent-pom-d", "x:own-c",
+    ]  # fmt: skip
+
+
+def test_unresolved_entries_name_their_kind(tmp_path):
+    pom = write_pom(tmp_path, """
+        <parent><groupId>${p}</groupId><artifactId>parent</artifactId></parent>
+        <dependencyManagement><dependencies>
+          <dependency><groupId>${m}</groupId><artifactId>managed</artifactId></dependency>
+        </dependencies></dependencyManagement>
+        <build>
+          <plugins><plugin><groupId>${q}</groupId><artifactId>plug</artifactId></plugin></plugins>
+          <pluginManagement><plugins>
+            <plugin><groupId>${r}</groupId><artifactId>managed-plug</artifactId></plugin>
+            <plugin><artifactId>maven-jar-plugin</artifactId></plugin>
+          </plugins></pluginManagement>
+        </build>""")
+    result = read_pom_coordinates(pom)
+    assert result.unresolved == [
+        "parent ${p}:parent", "managed dependency ${m}:managed", "plugin ${q}:plug", "managed plugin ${r}:managed-plug",
+    ]  # fmt: skip
+    assert [str(c) for c in result.coordinates] == ["org.apache.maven.plugins:maven-jar-plugin"]

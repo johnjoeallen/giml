@@ -77,3 +77,25 @@ def test_truncated_download_is_a_fetch_error(http_server, tmp_path):
     http_server.routes["/short.zip"] = Route(b"0123456789", headers={"X-Declared-Length": "1000"})
     with pytest.raises(FetchError, match=r"/short.zip: download interrupted"):
         UrlLibFetcher().download(f"{http_server.base_url}/short.zip", tmp_path / "short.zip")
+
+
+def test_slow_server_times_out(http_server):
+    http_server.routes["/slow"] = Route(b"late", delay_seconds=1.0)
+    with pytest.raises(FetchError, match=r"/slow: .*timed out"):
+        UrlLibFetcher(timeout_seconds=0.2).get_text(f"{http_server.base_url}/slow")
+
+
+def test_default_timeout_is_sixty_seconds():
+    assert UrlLibFetcher().timeout == 60.0
+
+
+def test_connection_refused_reason_is_reported():
+    with pytest.raises(FetchError, match=r"^http://127.0.0.1:9/x: \[Errno 111\] Connection refused$"):
+        UrlLibFetcher(timeout_seconds=2).get_text("http://127.0.0.1:9/x")
+
+
+def test_http_dates_are_normalised_to_utc():
+    # "-0000" means "UTC, source unknown" and parses as a naive datetime.
+    for value in ("Wed, 07 May 2025 00:29:33 -0000", "Wed, 07 May 2025 02:29:33 +0200"):
+        parsed = parse_http_date(value)
+        assert parsed.tzinfo is UTC and parsed.isoformat() == "2025-05-07T00:29:33+00:00"

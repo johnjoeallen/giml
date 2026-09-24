@@ -1,6 +1,7 @@
 import http.server
 import os
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
@@ -19,6 +20,7 @@ class Route:
     body: bytes = b""
     status: int = 200
     headers: dict[str, str] = field(default_factory=dict)
+    delay_seconds: float = 0.0
 
 
 @dataclass
@@ -41,6 +43,7 @@ def http_server() -> Iterator[LocalHttpServer]:
             with lock:
                 requests.append((self.command, self.path, self.headers.get("User-Agent", "")))
             route = routes.get(self.path, Route(status=404))
+            time.sleep(route.delay_seconds)
             self.send_response(route.status)
             headers = dict(route.headers)
             # X-Declared-Length lets a test announce more bytes than it sends (truncated body).

@@ -155,3 +155,20 @@ def test_fetch_failure_aborts_without_snapshot(tmp_path):
     with pytest.raises(FetchError, match="HTTP 503"):
         central.sync(tmp_path, fetcher, clock_at(1), [DATABIND], None, base_url=BASE)
     assert not (tmp_path / "snapshots").exists()
+
+
+def test_stats_sources_and_utc_dates_are_exact(tmp_path):
+    lib = Coordinate("org.example", "lib")
+    plus_two = datetime.timezone(datetime.timedelta(hours=2))
+    texts = {central.metadata_url(BASE, DATABIND): metadata("1.0", "1.1"), central.metadata_url(BASE, lib): metadata("2.0")}
+    dates = {pom(DATABIND, v): datetime.datetime(2020, 1, 1, 2, 0, tzinfo=plus_two) for v in ("1.0", "1.1")}
+    dates[pom(lib, "2.0")] = datetime.datetime(2021, 1, 1, tzinfo=UTC)
+    first = central.sync(tmp_path, FakeFetcher(texts, dates), clock_at(1), [DATABIND, lib, MISSING], None, base_url=BASE)
+    manifest = read_manifest(first.path)
+    assert manifest["sources"] == [BASE]
+    assert manifest["stats"]["not_found"] == 1 and manifest["stats"]["coordinates"] == 3
+    raw = central.load_raw(first)
+    assert raw[str(DATABIND)]["versions"]["1.0"] == "2020-01-01T00:00:00+00:00"
+
+    second = central.sync(tmp_path, FakeFetcher(texts, {}), clock_at(2), [], first, base_url=BASE)
+    assert read_manifest(second.path)["stats"]["release_dates_reused"] == 3
