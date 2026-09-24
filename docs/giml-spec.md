@@ -40,7 +40,7 @@ For a local Maven project in a git repository, giml:
 ### 1.3 Phase 1 scope (this document)
 
 In scope:
-- Local, report-only CLI. Python engine. Maven projects only.
+- Local, report-only CLI. Python engine. Single-module Maven projects only (one `pom.xml`).
 - Data sources: OSV and Maven Central only.
 - Deterministic planner with joint sets, CVE-minimal bumps, pins and bisection.
 - Tier assessment (JaCoCo + PIT), startup verification, outcome logging.
@@ -50,11 +50,14 @@ Out of scope for phase 1:
 - PR/MR creation, CI integration, central service, GPU training, LoRA/generative fine-tuning.
 - Any call to a frontier/hosted model, at build time or run time.
 - Gradle, npm or other ecosystems.
+- Multi-module Maven reactors (planned for a later phase; see section 1.4).
 - Exploit-likelihood feeds (KEV, EPSS). OSV severity is the only risk signal.
 
 ### 1.4 Future direction (design for it, do not build it)
 
 Later the same engine will run centrally, from CI, and open PRs. Therefore all environment-specific behaviour sits behind interfaces (section 4.2), the engine is stateless with explicit inputs and outputs, and results are cacheable by content.
+
+Multi-module Maven reactors will be supported later (editing in the declaring module, reactor-wide resolution). Keep POM location and editing behind a single seam so adding them does not reshape the planner.
 
 ---
 
@@ -91,6 +94,7 @@ Target project prerequisites (giml checks these and never installs or configures
 - A working Maven build on a JDK the developer has installed.
 - Unit tests (Surefire), **JaCoCo** producing `jacoco.xml`, and **pitest-maven** configured with XML output.
 - Optional: integration tests (Failsafe / `*IT`).
+- A single-module project: the root `pom.xml` declares no `<modules>` (including inside profiles). A multi-module project stops with exit code 3 and the message "multi-module projects unsupported in phase 1".
 - Missing prerequisites stop `assess` and `plan` with exit code 5 and name what is missing.
 
 Repository layout (Maven multi-module):
@@ -175,9 +179,23 @@ Unpushed local commits are **allowed**. Record the base SHA; the result branch b
 - **Result branch**: `giml/<base-sha-short>/<UTC-timestamp>`, created from the base commit in its own worktree.
 - **Trial worktrees**: throwaway worktrees (or reused scratch directories) for candidate builds. Failed attempts leave no git history.
 - **Commits on the result branch**: one commit per *accepted step*, each verified to pass all required stages. The tip is the best verified state; earlier commits are fallback points.
-- Commit content: only version edits to POM files (section 8.4). Commit message includes: what changed, CVEs cleared, remaining CVEs, tier, evidence reference (run id).
+- Commit content: only version edits to POM files (section 8.4), except the synthetic rewind commit of section 5.3. Commit message includes: what changed, CVEs cleared, remaining CVEs, tier, evidence reference (run id).
 - Git hooks are **disabled** in tool-owned worktrees (`core.hooksPath` set to an empty directory).
 - Cleanup: `giml clean` removes worktrees and (optionally, with `--branches`) result branches. Stale worktrees from crashed runs are detected at startup and reported.
+
+### 5.3 Rewind mode (testing and training)
+
+To create realistic "behind on dependencies" states from a project's own history, `giml plan --rewind-to <commit>` starts the run from an older `pom.xml`:
+
+1. Preflight (section 5.1) runs as normal on the developer's repository. `<commit>` must resolve, must be an ancestor of the base commit, and must contain `pom.xml`; otherwise exit 5.
+2. The result branch is named `giml/rewind/<base-sha-short>/<UTC-timestamp>` so it can never be mistaken for a normal result.
+3. In the result worktree, `pom.xml` is replaced by its content at `<commit>` (`git show <commit>:pom.xml`); all other files stay at the base commit. This is committed as the first commit on the result branch, with a message starting `[giml-rewind]` that names the rewind commit and states it is synthetic.
+4. The rewound state is the run's **baseline** (section 9.1). Verification rules (gate config, `.redkite/settings.yml`, tier) still come from the base commit (hard rule 7); only `pom.xml` is rewound. If build or unit tests fail at the rewound baseline, the run stops with stop reason `rewind_baseline_failed` (the base code does not work with the old POM), and this is recorded as an unusable rewind point.
+5. If the rewound `pom.xml` lacks plugins required by the prerequisites (section 3), the run stops with exit 5 and names them.
+6. Planning then proceeds forward from the rewound state as in a normal run.
+7. The base commit's own `pom.xml` is a known-good reference. The report compares, per dependency: rewound version, giml's result, and the base commit's version, with the CVE exposure of each state.
+
+Rewind mode uses git history only. The developer's working tree is never touched, and nothing is pushed (hard rules 1 and 2).
 
 ---
 
@@ -342,7 +360,7 @@ Stop conditions (first that occurs): no untried candidate set improves the ranki
 
 - Edit **only version values** (and add `dependencyManagement` pins when required), at the location where the version is actually declared: direct `<version>`, a property, `dependencyManagement`, or the parent version.
 - Use lossless, minimal text edits so formatting and comments are untouched. Never re-serialise the whole POM.
-- Multi-module reactors: edit in the declaring module; if a declaration site cannot be determined, report "unsupported" for that dependency and leave it unchanged.
+- Single POM only in phase 1 (section 3). If a version's declaration site cannot be determined within that POM (for example it comes only from an external parent or BOM), report "unsupported" for that dependency and leave it unchanged, except where the parent version itself is the declaration site.
 - Every pin/deferral records a **reason** and a **re-evaluation trigger** (new release of the dependency, new advisory, POM change).
 
 ### 8.5 Ranking ("best" state)
@@ -413,7 +431,7 @@ Minimum tables (columns indicative; add indices as needed):
 
 - `project(id, path, remote_url_hash, declared_tier, created_at)`
 - `snapshot(id, source, fetched_at, content_hash, path)`
-- `run(id, project_id, base_sha, branch, started_at, finished_at, config_version, osv_snapshot_id, central_snapshot_id, budget_json, stop_reason, seed)`
+- `run(id, project_id, base_sha, branch, started_at, finished_at, config_version, osv_snapshot_id, central_snapshot_id, budget_json, stop_reason, seed, rewind_from_sha)` — `rewind_from_sha` is null unless the run used rewind mode (section 5.3)
 - `gate_result(id, project_id, base_sha, config_version, json, measured_at, expires_at)`
 - `candidate_state(id, run_id, parent_id, changes_json, rank_json, status)`
 - `build_attempt(id, state_id, stage, outcome, failure_class, error_signature, cache_key, cache_hit, duration_ms, log_path)`
@@ -486,13 +504,14 @@ giml status                                  snapshot ages, state dir, stale wor
 giml assess <path> [--declared-tier X]       run gate assessment, print/store result
 giml plan <path> [--profile cve_first]       full pipeline; leaves result branch + report
               [--max-builds N] [--max-minutes N] [--allow-detached] [--dry-run]
+              [--rewind-to <commit>]         start from pom.xml at <commit> (section 5.3)
 giml report <run-id> [--format json|md]      re-render a stored report
 giml clean [--all] [--branches]              remove worktrees (and optionally branches)
 ```
 
 `--dry-run` performs preflight, assessment, and planning without building (lists candidate sets and reasons).
 
-Exit codes: 0 success (plan produced), 1 no improvement found, 2 preflight refusal, 3 ineligible (tier/gate), 4 infrastructure failure, 5 configuration error.
+Exit codes: 0 success (plan produced), 1 no improvement found, 2 preflight refusal, 3 ineligible (tier/gate, or unsupported project shape such as multi-module), 4 infrastructure failure, 5 configuration error.
 
 ---
 
@@ -506,6 +525,7 @@ Contents:
 - Comparison with the **naive baseline** (each dependency independently bumped to latest): builds spent, pass/fail, CVEs cleared.
 - Evidence per accepted step: stages passed, cache hits, timings, API-diff summary, new startup warnings.
 - Budget used and stop reason (and an explicit note if optimality is not guaranteed).
+- Rewind runs (section 5.3): the rewind commit, a clear "synthetic" label, and the per-dependency comparison of rewound, giml result and base-commit versions with CVE exposure.
 - Hand-off commands (never executed by the tool):
   - `git diff <base>..<branch>`
   - `git push -u origin <branch>` and open a PR (developer's decision)
@@ -517,7 +537,7 @@ Contents:
 
 From milestone 4, every attempt is logged as a labelled example:
 
-- **Features**: failure class and normalised error signature, changed coordinates and version jumps (semver distance, days since release, major/minor/patch), BOM membership, API-diff summary, dependency-tree diff summary, project tier and oracle strength, new startup warnings, prior knowledge counts.
+- **Features**: failure class and normalised error signature, changed coordinates and version jumps (semver distance, days since release, major/minor/patch), BOM membership, API-diff summary, dependency-tree diff summary, project tier and oracle strength, new startup warnings, prior knowledge counts, whether the run is a rewind run (and the rewind commit and its date).
 - **Label**: outcome (pass/fail by stage), and for failures the eventual fixing pin or demotion.
 - **Normalisation**: strip paths, timestamps, line numbers, ids from error text to form the signature; hash it.
 - **Deduplication**: exact dedup on (dependency, from, to, signature); near-duplicate detection (embedding similarity) for forks/vendored copies; multi-module repeat errors collapsed.
@@ -558,8 +578,8 @@ Work in order; stop at each checkpoint.
 - Acceptance: `sync` produces timestamped, hashed snapshots; `status` reads them; unit tests for range matching using Maven version ordering; the tool's own build meets Tier B.
 
 **M2 — Git safety (est. 1 week)**
-- Preflight (section 5.1), git wrapper that rejects `push`, worktree/branch lifecycle, locking, `clean`, stale worktree detection.
-- Acceptance: tests prove a dirty tree is refused, the developer's checkout is untouched after a run, `push` cannot be invoked, hooks are disabled in worktrees, crashed runs are detected.
+- Preflight (section 5.1), git wrapper that rejects `push`, worktree/branch lifecycle, locking, `clean`, stale worktree detection, multi-module detection, rewind-mode worktree setup (section 5.3, steps 1 to 3).
+- Acceptance: tests prove a dirty tree is refused, the developer's checkout is untouched after a run, `push` cannot be invoked, hooks are disabled in worktrees, crashed runs are detected, a multi-module project is refused with exit 3, `--rewind-to` creates the marked rewind commit with only `pom.xml` changed and rejects non-ancestor commits.
 
 **M3 — Gate assessment (est. 1 week)**
 - JaCoCo and PIT collectors (strength and mutation coverage computed from raw statuses), integration-test detection, flake check, excluded share, tier evaluator, `giml assess`.
@@ -567,12 +587,12 @@ Work in order; stop at each checkpoint.
 - Acceptance: assessment JSON matches section 6.4; survey report produced; thresholds reviewed with the user before locking config version 2.
 
 **M4 — Build runner, cache, outcome logging (est. 1 week)**
-- `BuildRunner` with isolated dirs, shared repository cache, content-addressed caching with hit/miss and timing metrics, baseline verification, failure classification, error-signature normalisation, `example` logging.
+- `BuildRunner` with isolated dirs, shared repository cache, content-addressed caching with hit/miss and timing metrics, baseline verification (including the rewound baseline and `rewind_baseline_failed`, section 5.3), failure classification, error-signature normalisation, `example` logging.
 - Acceptance: repeated identical runs show cache hits; baseline failure is handled per section 9.1; signatures are stable across path/timestamp differences.
 
 **M5 — Deterministic planner (est. 2–3 weeks)**
-- Resolution via the dependency plugin's JSON output, candidate generation (section 8.2), lossless POM edits, joint search with delta-debugging isolation and re-promotion, ranking profiles, deferrals with triggers, japicmp-based candidate filtering, dry-run mode, naive-baseline comparison, result-branch commits, report generation.
-- Acceptance: on at least three real projects (including one deliberately behind on dependencies) the plan is produced with evidence; POM diffs touch only versions; comparison with the naive baseline shows builds, pass rate and CVEs cleared; no CVE is silently left open by a pin.
+- Resolution via the dependency plugin's JSON output, candidate generation (section 8.2), lossless POM edits, joint search with delta-debugging isolation and re-promotion, ranking profiles, deferrals with triggers, japicmp-based candidate filtering, dry-run mode, naive-baseline comparison, result-branch commits, report generation including the rewind comparison (section 5.3).
+- Acceptance: on at least three real projects (including one deliberately behind on dependencies) the plan is produced with evidence; POM diffs of accepted steps touch only versions; at least one project is run in rewind mode and its report compares giml's result with the base commit's versions; comparison with the naive baseline shows builds, pass rate and CVEs cleared; no CVE is silently left open by a pin.
 
 **M6 — Startup verification (est. 1–2 weeks)**
 - Settings loader/validator (section 12.1), smoke runner (12.2), PostgreSQL lifecycle (12.3), baseline handling, integration into the pipeline and tier evaluation.
@@ -590,7 +610,7 @@ Work in order; stop at each checkpoint.
 ## 18. Testing strategy for giml itself
 
 - Unit tests for version ordering, OSV range matching, candidate generation, ranking, signature normalisation, POM edit preservation (golden files).
-- Integration tests using small fixture Maven projects committed under `tests/fixtures/` covering: clean upgrade, transitive conflict, API-breaking upgrade, startup-only failure, migration failure, unreachable database, dirty repo, detached HEAD.
+- Integration tests using small fixture Maven projects committed under `tests/fixtures/` covering: clean upgrade, transitive conflict, API-breaking upgrade, startup-only failure, migration failure, unreachable database, dirty repo, detached HEAD, multi-module refusal, rewind to an older `pom.xml` (usable and `rewind_baseline_failed`).
 - Property tests for the delta-debugging isolation (given a known failing subset, it must find it within a bound).
 - No-AI-API test: no AI/LLM client library is a dependency, and planning and ML stages run with connections to known AI API hosts blocked; must succeed.
 - Safety tests: `push` rejected; developer checkout unchanged; secrets absent from all artefacts.

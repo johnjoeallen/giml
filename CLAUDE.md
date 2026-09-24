@@ -40,6 +40,8 @@ Multi-module Maven project; see spec section 3 for the module list and responsib
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-24: Rewind mode `plan --rewind-to <commit>` (spec §5.3): restore `pom.xml` from an ancestor commit as a marked synthetic first commit, for test/training data. Git history only, no date-based rewind. User choice.
+- 2026-09-24: Phase 1 supports single-module projects only; multi-module refused with exit 3 and deferred to a later phase. User instruction.
 - 2026-09-24: Maven builds use the developer's `~/.m2` settings and local repository; only the smoke-launched app gets a per-trial home (spec §9.2).
 - 2026-09-24: Per-version release dates come from the Maven Central search API (`core=gav`); `maven-metadata.xml` has none (spec Q10).
 - 2026-09-24: Severity uses an in-house CVSS v3.x calculator, falling back to the OSV/GHSA label; score source recorded (spec Q11).
