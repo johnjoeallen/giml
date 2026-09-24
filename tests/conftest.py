@@ -15,6 +15,16 @@ settings.register_profile("explore", max_examples=2000)
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path_factory, monkeypatch):
+    """Keep the developer's global git config (and anything else under HOME) out of tests."""
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    return home
+
+
 @dataclass
 class Route:
     body: bytes = b""
