@@ -39,7 +39,9 @@ Record here only commands that have actually been run successfully. Verified wit
 
 ## Layout
 
-Multi-module Maven project; see spec section 3 for the module list and responsibilities. Record deviations from the spec layout here.
+Python package under `src/giml/` with tests under `tests/`; see spec section 3 for the layout. Record deviations from the spec layout here.
+
+- `config/gate-config.yaml` is the default gate config (spec §6.1); loaded by `giml.core.config`.
 
 ## Decisions log
 
