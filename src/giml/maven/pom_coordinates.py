@@ -13,13 +13,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from giml.core.model import Coordinate
+from giml.maven import pom_xml
+from giml.maven.pom_xml import PomError
+
+__all__ = ["PomCoordinates", "PomError", "read_pom_coordinates"]
 
 _PROPERTY = re.compile(r"\$\{([^}]+)\}")
 _DEFAULT_PLUGIN_GROUP = "org.apache.maven.plugins"
-
-
-class PomError(ValueError):
-    """The POM cannot be read or parsed."""
 
 
 @dataclass
@@ -28,47 +28,25 @@ class PomCoordinates:
     unresolved: list[str] = field(default_factory=list)  # human-readable descriptions
 
 
-def _local(tag: str) -> str:
-    return tag.rsplit("}", 1)[-1]
-
-
-def _child(element: ET.Element | None, name: str) -> ET.Element | None:
-    if element is None:
-        return None
-    return next((c for c in element if _local(c.tag) == name), None)
-
-
-def _children(element: ET.Element, *path: str) -> list[ET.Element]:
-    nodes = [element]
-    for name in path:
-        nodes = [c for n in nodes for c in n if _local(c.tag) == name]
-    return nodes
-
-
-def _text(element: ET.Element | None, name: str) -> str | None:
-    child = _child(element, name)
-    return child.text.strip() if child is not None and child.text else None
-
-
 class _Unresolved(Exception):
     """A ``${...}`` reference with no value, or a reference cycle."""
 
 
 class _Interpolator:
     def __init__(self, project: ET.Element) -> None:
-        parent = _child(project, "parent")
-        group = _text(project, "groupId") or _text(parent, "groupId")
+        parent = pom_xml.child(project, "parent")
+        group = pom_xml.text(project, "groupId") or pom_xml.text(parent, "groupId")
         self.values: dict[str, str | None] = {
             "project.groupId": group,
             "pom.groupId": group,
             "groupId": group,
-            "project.artifactId": _text(project, "artifactId"),
-            "project.parent.groupId": _text(parent, "groupId"),
-            "project.parent.artifactId": _text(parent, "artifactId"),
+            "project.artifactId": pom_xml.text(project, "artifactId"),
+            "project.parent.groupId": pom_xml.text(parent, "groupId"),
+            "project.parent.artifactId": pom_xml.text(parent, "artifactId"),
         }
-        for prop in _children(project, "properties"):
+        for prop in pom_xml.children(project, "properties"):
             for entry in prop:
-                self.values.setdefault(_local(entry.tag), (entry.text or "").strip())
+                self.values.setdefault(pom_xml.local(entry.tag), (entry.text or "").strip())
 
     def resolve(self, text: str | None, seen: frozenset[str] = frozenset()) -> str | None:
         if text is None:
@@ -89,19 +67,14 @@ class _Interpolator:
 
 
 def read_pom_coordinates(pom: Path) -> PomCoordinates:
-    try:
-        root = ET.parse(pom).getroot()
-    except (OSError, ET.ParseError) as exc:
-        raise PomError(f"{pom}: cannot parse: {exc}") from exc
-    if _local(root.tag) != "project":
-        raise PomError(f"{pom}: root element is <{_local(root.tag)}>, expected <project>")
+    root = pom_xml.parse_project(pom)
 
     interpolate = _Interpolator(root)
     result = PomCoordinates()
 
     def add(kind: str, element: ET.Element, default_group: str | None = None) -> None:
-        raw_group = _text(element, "groupId") or default_group
-        raw_artifact = _text(element, "artifactId")
+        raw_group = pom_xml.text(element, "groupId") or default_group
+        raw_artifact = pom_xml.text(element, "artifactId")
         group, artifact = interpolate.resolve(raw_group), interpolate.resolve(raw_artifact)
         try:
             coordinate = Coordinate(group or "", artifact or "")
@@ -110,17 +83,17 @@ def read_pom_coordinates(pom: Path) -> PomCoordinates:
             return
         result.coordinates.add(coordinate)
 
-    parent = _child(root, "parent")
+    parent = pom_xml.child(root, "parent")
     if parent is not None:
         add("parent", parent)
-    scopes = [root, *_children(root, "profiles", "profile")]
+    scopes = [root, *pom_xml.children(root, "profiles", "profile")]
     for scope in scopes:
-        for dep in _children(scope, "dependencies", "dependency"):
+        for dep in pom_xml.children(scope, "dependencies", "dependency"):
             add("dependency", dep)
-        for dep in _children(scope, "dependencyManagement", "dependencies", "dependency"):
+        for dep in pom_xml.children(scope, "dependencyManagement", "dependencies", "dependency"):
             add("managed dependency", dep)
-        for plugin in _children(scope, "build", "plugins", "plugin"):
+        for plugin in pom_xml.children(scope, "build", "plugins", "plugin"):
             add("plugin", plugin, _DEFAULT_PLUGIN_GROUP)
-        for plugin in _children(scope, "build", "pluginManagement", "plugins", "plugin"):
+        for plugin in pom_xml.children(scope, "build", "pluginManagement", "plugins", "plugin"):
             add("managed plugin", plugin, _DEFAULT_PLUGIN_GROUP)
     return result
