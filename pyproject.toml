@@ -45,3 +45,5 @@ show_missing = true
 [tool.mutmut]
 source_paths = ["src/giml/"]
 also_copy = ["config/", "scripts/"]
+# Protocol declarations only: mutating their default values changes no behaviour.
+do_not_mutate = ["*giml/core/interfaces.py"]

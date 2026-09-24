@@ -9,7 +9,8 @@ coverage.py and mutmut stand in for JaCoCo and PIT. The mutmut counts map to PIT
 
 ``suspicious`` and ``segfault`` mutants are treated as not detected (conservative).
 Excluded share is the percentage of statements excluded from coverage (``pragma: no cover``) or
-from mutation (``pragma: no mutate``), mirroring spec 6.3 step 5.
+from mutation (``pragma: no mutate`` lines and files matched by ``[tool.mutmut] do_not_mutate``),
+mirroring spec 6.3 step 5.
 
 Usage: python scripts/selfgate.py [--tier B] [--flake-runs N] [--skip-mutation]
 Needs the dev extra installed; run from the repository root. Exit 0 only if every metric passes.
@@ -18,11 +19,13 @@ Needs the dev extra installed; run from the repository root. Exit 0 only if ever
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,15 +71,23 @@ def coverage_metrics(tier: Tier) -> list[Metric]:
         raise SystemExit(f"selfgate: test suite failed under coverage; fix tests first\n{result.stdout}")
     report = ROOT / "coverage.json"
     _run([_bin("coverage"), "json", "-q", "-o", str(report)], check=True)
-    totals = json.loads(report.read_text(encoding="utf-8"))["totals"]
+    data = json.loads(report.read_text(encoding="utf-8"))
+    totals = data["totals"]
     report.unlink()
+    patterns = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["mutmut"].get(
+        "do_not_mutate", []
+    )
+    unmutated = sum(
+        info["summary"]["num_statements"] for name, info in data["files"].items()
+        if any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+    )
     line = 100.0 * totals["covered_lines"] / totals["num_statements"]
     branch = 100.0 * totals["covered_branches"] / totals["num_branches"] if totals["num_branches"] else 100.0
     no_mutate = sum(
         line.count("pragma: no mutate") for path in (ROOT / "src").rglob("*.py")
         for line in path.read_text(encoding="utf-8").splitlines()
     )
-    excluded = totals["excluded_lines"] + no_mutate
+    excluded = totals["excluded_lines"] + no_mutate + unmutated
     share = 100.0 * excluded / (totals["num_statements"] + totals["excluded_lines"])
     return [
         Metric("unit_line_coverage", line, tier.unit_line_coverage),
