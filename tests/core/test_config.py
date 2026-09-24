@@ -20,13 +20,16 @@ def parse(data: dict):
 
 def test_default_config_loads_as_specified():
     config = load_gate_config(DEFAULT_CONFIG)
-    assert config.version == 2
+    assert config.version == 3
     assert list(config.tiers) == ["A", "B"]
     b = config.tiers["B"]
     assert (b.unit_line_coverage, b.unit_branch_coverage) == (80, 70)
     assert (b.pit_test_strength, b.pit_mutation_coverage) == (85, 80)
-    assert b.ml_action == "suggest_only" and b.expires is None
-    assert config.tiers["A"].require_startup_check is True
+    assert b.max_excluded_share == 15 and b.expires is None
+    assert config.autonomy == {"A": "auto_apply", "B": "suggest_only"}
+    assert (config.verification.integration_tests, config.verification.startup_check) == (
+        "when_present", "when_configured",
+    )  # fmt: skip
     assert config.shared.flake_check_runs == 5
     assert config.planning.objective_profile == "cve_first"
     assert config.planning.release_cooldown_days == 7
@@ -48,7 +51,7 @@ def test_unknown_top_level_key_is_rejected():
 
 
 def test_duplicate_key_is_rejected():
-    text = DEFAULT_CONFIG.read_text(encoding="utf-8").replace("version: 2", "version: 2\nversion: 3")
+    text = DEFAULT_CONFIG.read_text(encoding="utf-8").replace("version: 3", "version: 3\nversion: 4")
     with pytest.raises(ConfigError, match="duplicate key 'version' at line 2"):
         parse_gate_config(text)
 
@@ -66,8 +69,9 @@ def test_missing_key_is_rejected():
         (("tiers", "B"), "unit_line_coverage", 101, "percentage 0-100"),
         (("tiers", "B"), "unit_line_coverage", True, "percentage 0-100"),
         (("tiers", "B"), "unit_line_coverage", "80", "percentage 0-100"),
-        (("tiers", "B"), "require_startup_check", "no", "true or false"),
-        (("tiers", "B"), "ml_action", "maybe", "one of auto_apply, suggest_only, none"),
+        (("autonomy",), "B", "maybe", "one of auto_apply, suggest_only"),
+        (("verification",), "integration_tests", "always", "one of when_present, off"),
+        (("verification",), "startup_check", True, "one of when_configured, off"),
         (("shared",), "flake_check_runs", 0, "integer >= 1"),
         (("shared",), "touchpoint_thresholds", "custom", "one of same_as_tier"),
         (("planning",), "release_cooldown_days", -1, "integer >= 0"),
@@ -120,6 +124,7 @@ def test_invalid_yaml_is_a_config_error():
 def test_named_tier_with_expiry_is_allowed():
     data = default_data()
     data["tiers"]["B-legacy"] = dict(data["tiers"]["B"], expires=datetime.date(2027, 1, 31))
+    data["autonomy"]["B-legacy"] = "suggest_only"
     config = parse(data)
     assert config.tiers["B-legacy"].expires == datetime.date(2027, 1, 31)
 
@@ -192,3 +197,32 @@ def test_empty_tiers_message_is_exact():
     with pytest.raises(ConfigError) as exc:
         parse(data)
     assert str(exc.value) == "tiers: expected a non-empty mapping of tier name to thresholds"
+
+
+@pytest.mark.parametrize("key", ["require_integration_tests", "require_startup_check", "ml_action"])
+def test_non_test_quality_settings_are_not_tier_keys(key):
+    data = default_data()
+    data["tiers"]["B"][key] = True
+    with pytest.raises(ConfigError, match=rf"tiers\.B: unknown key\(s\): {key}"):
+        parse(data)
+
+
+def test_every_tier_needs_an_autonomy_action():
+    data = default_data()
+    data["tiers"]["C"] = dict(data["tiers"]["B"])
+    with pytest.raises(ConfigError, match="autonomy: no action for tier\\(s\\): C"):
+        parse(data)
+
+
+def test_autonomy_for_an_undefined_tier_is_rejected():
+    data = default_data()
+    data["autonomy"]["Z"] = "suggest_only"
+    with pytest.raises(ConfigError, match=r"autonomy: unknown key\(s\): Z"):
+        parse(data)
+
+
+def test_verification_stages_can_be_switched_off():
+    data = default_data()
+    data["verification"] = {"integration_tests": "off", "startup_check": "off"}
+    config = parse(data)
+    assert (config.verification.integration_tests, config.verification.startup_check) == ("off", "off")

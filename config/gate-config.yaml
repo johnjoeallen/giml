@@ -1,25 +1,27 @@
-version: 2
+version: 3
 
-tiers:
-  A:                              # auto-apply after verification loop (future); strongest oracle
+tiers:                            # test-quality levels only (unit coverage and PIT)
+  A:                              # strongest oracle
     unit_line_coverage: 90
     unit_branch_coverage: 80
     pit_test_strength: 92         # killed / mutants in covered code
     pit_mutation_coverage: 90     # killed / all mutants
-    require_integration_tests: true
-    require_startup_check: true
     max_excluded_share: 10        # percent of code excluded from metrics
-    ml_action: auto_apply
-  B:                              # suggest-only, human review
+  B:
     unit_line_coverage: 80
     unit_branch_coverage: 70
     pit_test_strength: 85
     pit_mutation_coverage: 80
-    require_integration_tests: false
-    require_startup_check: false  # recorded either way
     max_excluded_share: 15
-    ml_action: suggest_only
-  # below B: no tier, ml_action = none (report outdated/vulnerable only, propose nothing)
+  # below B: no tier (report outdated/vulnerable only, propose nothing)
+
+autonomy:                         # what giml may do with a verified result, per earned tier
+  A: auto_apply                   # future; phase 1 never applies anything itself
+  B: suggest_only
+
+verification:                     # stages for every tier; not part of any tier
+  integration_tests: when_present # run Failsafe/*IT tests when the project has them (or off)
+  startup_check: when_configured  # run the smoke check when settings configure it (or off)
 
 shared:
   touchpoint_thresholds: same_as_tier

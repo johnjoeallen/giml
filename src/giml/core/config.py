@@ -12,8 +12,10 @@ from typing import Any
 
 import yaml
 
-ML_ACTIONS = ("auto_apply", "suggest_only", "none")
+AUTONOMY_ACTIONS = ("auto_apply", "suggest_only")
 TOUCHPOINT_THRESHOLDS = ("same_as_tier",)
+INTEGRATION_TEST_MODES = ("when_present", "off")
+STARTUP_CHECK_MODES = ("when_configured", "off")
 
 
 class ConfigError(ValueError):
@@ -22,16 +24,23 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Tier:
+    """A test-quality level (spec 6): thresholds only, never upgrade criteria or stages."""
+
     name: str
     unit_line_coverage: float
     unit_branch_coverage: float
     pit_test_strength: float
     pit_mutation_coverage: float
-    require_integration_tests: bool
-    require_startup_check: bool
     max_excluded_share: float
-    ml_action: str
     expires: datetime.date | None = None
+
+
+@dataclass(frozen=True)
+class VerificationSettings:
+    """Verification stages that run at every tier."""
+
+    integration_tests: str
+    startup_check: str
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,8 @@ class PlanningSettings:
 class GateConfig:
     version: int
     tiers: dict[str, Tier]
+    autonomy: dict[str, str]  # earned tier name -> action; no tier means propose nothing
+    verification: VerificationSettings
     shared: SharedSettings
     planning: PlanningSettings
     warnings: tuple[str, ...] = ()
@@ -105,12 +116,6 @@ class _Section:
             raise ConfigError(f"{self.path}.{key}: expected a percentage 0-100, got {value!r}")
         return float(value)
 
-    def bool(self, key: str) -> bool:
-        value = self._get(key)
-        if not isinstance(value, bool):
-            raise ConfigError(f"{self.path}.{key}: expected true or false, got {value!r}")
-        return value
-
     def choice(self, key: str, allowed: tuple[str, ...]) -> str:
         value = self._get(key)
         if value not in allowed:
@@ -148,10 +153,7 @@ def _parse_tier(name: str, data: Any) -> Tier:
         unit_branch_coverage=section.percent("unit_branch_coverage"),
         pit_test_strength=section.percent("pit_test_strength"),
         pit_mutation_coverage=section.percent("pit_mutation_coverage"),
-        require_integration_tests=section.bool("require_integration_tests"),
-        require_startup_check=section.bool("require_startup_check"),
         max_excluded_share=section.percent("max_excluded_share"),
-        ml_action=section.choice("ml_action", ML_ACTIONS),
         expires=section.optional_date("expires"),
     )
     section.finish()
@@ -171,6 +173,20 @@ def parse_gate_config(text: str) -> GateConfig:
     if not isinstance(tiers_data, dict) or not tiers_data:
         raise ConfigError("tiers: expected a non-empty mapping of tier name to thresholds")
     tiers = {str(name): _parse_tier(str(name), value) for name, value in tiers_data.items()}
+
+    autonomy_section = _Section(root.mapping("autonomy"), "autonomy")
+    missing = [name for name in tiers if name not in autonomy_section.data]
+    if missing:
+        raise ConfigError(f"autonomy: no action for tier(s): {', '.join(missing)}")
+    autonomy = {name: autonomy_section.choice(name, AUTONOMY_ACTIONS) for name in tiers}
+    autonomy_section.finish()
+
+    verification_section = _Section(root.mapping("verification"), "verification")
+    verification = VerificationSettings(
+        integration_tests=verification_section.choice("integration_tests", INTEGRATION_TEST_MODES),
+        startup_check=verification_section.choice("startup_check", STARTUP_CHECK_MODES),
+    )
+    verification_section.finish()
 
     shared_section = _Section(root.mapping("shared"), "shared")
     shared = SharedSettings(
@@ -196,7 +212,7 @@ def parse_gate_config(text: str) -> GateConfig:
         for t in tiers.values()
         if t.pit_test_strength <= t.pit_mutation_coverage
     )
-    return GateConfig(version, tiers, shared, planning, warnings)
+    return GateConfig(version, tiers, autonomy, verification, shared, planning, warnings)
 
 
 def load_gate_config(path: Path) -> GateConfig:

@@ -201,7 +201,7 @@ Rewind mode uses git history only. The developer's working tree is never touched
 
 ## 6. Tiers and quality gate
 
-Verification is only as strong as the project's tests. The **tier** is a measure of test quality (unit coverage and PIT levels) and determines how much autonomy the tool has and how much weight its results carry.
+Verification is only as strong as the project's tests. The **tier** is a measure of test quality (unit coverage and PIT levels) and nothing else. It decides how much weight results carry and, through the separate `autonomy` mapping, how much autonomy the tool has.
 
 A tier never changes *what* a good upgrade is. The CVE criteria (`cve_minimal` candidates, section 8.2) and the best-update ranking (section 8.5) apply identically to every tier; a higher tier cannot relax them and a lower tier cannot tighten them (confirmed 2026-09-24).
 
@@ -210,28 +210,30 @@ A tier never changes *what* a good upgrade is. The CVE criteria (`cve_minimal` c
 `config/gate-config.yaml`:
 
 ```yaml
-version: 2
+version: 3
 
-tiers:
-  A:                              # auto-apply after verification loop (future); strongest oracle
+tiers:                            # test-quality levels only (unit coverage and PIT)
+  A:                              # strongest oracle
     unit_line_coverage: 90
     unit_branch_coverage: 80
     pit_test_strength: 92         # killed / mutants in covered code
     pit_mutation_coverage: 90     # killed / all mutants
-    require_integration_tests: true
-    require_startup_check: true
     max_excluded_share: 10        # percent of code excluded from metrics
-    ml_action: auto_apply
-  B:                              # suggest-only, human review
+  B:
     unit_line_coverage: 80
     unit_branch_coverage: 70
     pit_test_strength: 85
     pit_mutation_coverage: 80
-    require_integration_tests: false
-    require_startup_check: false  # recorded either way
     max_excluded_share: 15
-    ml_action: suggest_only
-  # below B: no tier, ml_action = none (report outdated/vulnerable only, propose nothing)
+  # below B: no tier (report outdated/vulnerable only, propose nothing)
+
+autonomy:                         # what giml may do with a verified result, per earned tier
+  A: auto_apply                   # future; phase 1 never applies anything itself
+  B: suggest_only
+
+verification:                     # stages for every tier; not part of any tier
+  integration_tests: when_present # run Failsafe/*IT tests when the project has them (or off)
+  startup_check: when_configured  # run the smoke check when settings configure it (or off)
 
 shared:
   touchpoint_thresholds: same_as_tier
@@ -242,12 +244,13 @@ planning:
   release_cooldown_days: 7        # ignore artifact versions younger than this
   max_builds: 60
   max_wall_minutes: 120
-  objective_profile: cve_first    # see section 10.4
+  objective_profile: cve_first    # see section 8.5
 ```
 
-All numbers are **placeholders** to be calibrated after the survey run (milestone 3). They are configurable, and projects **choose a tier**, they do not set numbers. Changing a tier's numbers bumps `version` and triggers re-evaluation of existing results.
+All numbers are **placeholders** to be calibrated after the survey run (milestone 3). They are configurable, and projects **choose a tier**, they do not set numbers. Changing a tier's numbers (or the config's structure) bumps `version` and triggers re-evaluation of existing results.
 
 Notes:
+- A tier holds only test-quality thresholds (confirmed 2026-09-24). Integration tests and the startup check are verification stages that run at every tier when present or configured (`verification`), and autonomy is a separate mapping from earned tier to action (`autonomy`), so neither is a tier requirement.
 - Test strength is always >= mutation coverage for the same run. The validator warns if a tier's strength threshold is not above its mutation coverage threshold.
 - Exceptional cases get a **named tier** defined centrally (for example `B-legacy` with an expiry), not per-project overrides.
 
@@ -292,7 +295,7 @@ Persisted and printed as JSON:
   "excluded": ["..."],
   "startup_check": "verified|not_configured|baseline_failed",
   "failed_for_declared": ["unit_branch_coverage", "pit_mutation_coverage"],
-  "ml_action": "suggest_only",
+  "autonomy": "suggest_only",
   "base_sha": "...",
   "measured_at": "2026-09-24T00:00:00Z",
   "expires": "2026-10-24T00:00:00Z"
@@ -393,7 +396,7 @@ Applied to every candidate state, in order; stop at first failure and classify i
 1. **Resolve/compile** (`mvn` via `BuildRunner`).
 2. **Unit tests.**
 3. **Integration tests** (if configured/present).
-4. **Startup verification** (section 12) when configured; required for Tier A.
+4. **Startup verification** (section 12) when configured (`verification.startup_check`), at every tier.
 5. **PIT/touchpoint check** scoped to touchpoint classes when required by the tier (may be sampled/cached).
 
 Failure classes (used in logs and ML): `resolution`, `compile`, `enforcer_convergence`, `duplicate_classes`, `unit_test`, `integration_test`, `startup`, `migration`, `timeout`, `infrastructure` (not the candidate's fault; retry/ignore).
@@ -471,7 +474,7 @@ smoke:
 Rules:
 - Read from the **base commit**.
 - Only declarative data: **no command field**, nothing executable. Reject unknown keys that look like commands.
-- Missing file or missing `smoke.profile` → startup check `not_configured` (caps the project below Tier A).
+- Missing file or missing `smoke.profile` → startup check `not_configured`: the stage is skipped and the report says so. It does not affect the tier.
 - Validate that the profile exists in the project (`application-<profile>.yml|.properties`, or a `@Profile` reference). A profile that activates nothing must fail validation.
 - Refuse if `env` contains secret-looking values (heuristics: password/secret/token/key names with literal values). Secrets are supplied from the runner's local, uncommitted environment and never written to reports, logs or commits.
 
@@ -588,7 +591,7 @@ Work in order; stop at each checkpoint.
 **M3 — Gate assessment (est. 1 week)**
 - JaCoCo and PIT collectors (strength and mutation coverage computed from raw statuses), integration-test detection, flake check, excluded share, tier evaluator, `giml assess`.
 - **Survey run** across the user's real projects producing a table of the four metrics side by side, to calibrate tier numbers.
-- Acceptance: assessment JSON matches section 6.4; survey report produced; thresholds reviewed with the user before locking config version 2.
+- Acceptance: assessment JSON matches section 6.4; survey report produced; thresholds reviewed with the user before locking the config version.
 
 **M4 — Build runner, cache, outcome logging (est. 1 week)**
 - `BuildRunner` with isolated dirs, shared repository cache, content-addressed caching with hit/miss and timing metrics, baseline verification (including the rewound baseline and `rewind_baseline_failed`, section 5.3), failure classification, error-signature normalisation, `example` logging.
@@ -629,7 +632,7 @@ Work in order; stop at each checkpoint.
 4. ~~Submodules/LFS.~~ Answered 2026-09-24: unsupported in phase 1; detected and refused.
 5. Exact name and location of the settings file: `.redkite/settings.yml` vs the earlier `.redkite/settings.xml`; and which keys it should carry. (M6)
 6. Initial project set: which repositories, and which is deliberately behind on dependencies. (M3/M5)
-7. Initial tier numbers are placeholders; lock after the M3 survey. (M3)
+7. Initial tier numbers are placeholders; lock after the M3 survey (config version 3 since 2026-09-24). (M3)
 8. Metric definitions: gate on both PIT test strength and mutation coverage as specified; confirm which of the existing "80%" figures in current policy refers to which. (M3)
 9. Which local PostgreSQL setup (install or container) and role provisioning. (M6)
 10. ~~Source of per-version release dates.~~ Answered 2026-09-24: `Last-Modified` of each version's `.pom` (search API index found stale); see section 7.2.
