@@ -107,3 +107,59 @@ def test_packaged_migration_names_match_files():
 def test_state_directory_is_created_with_parents(tmp_path):
     with SqliteStateStore(tmp_path / "a" / "b" / "state.db") as store:
         assert store.schema_version >= 1
+
+
+from giml.core.model import ProjectRecord, RunRecord  # noqa: E402
+
+T0 = datetime.datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
+
+
+def project(project_id="demo-12345678", path="/repo"):
+    return ProjectRecord(project_id, Path(path), "ab" * 32, T0)
+
+
+def run(run_id, project_id="demo-12345678", minute=0, rewind=None):
+    started = T0 + datetime.timedelta(minutes=minute)
+    return RunRecord(run_id, project_id, "c" * 40, f"giml/ccccccc/{run_id}", Path(f"/state/wt/{run_id}"),
+                     started, rewind_from_sha=rewind)  # fmt: skip
+
+
+def test_project_round_trip_and_refresh(tmp_path):
+    with SqliteStateStore(tmp_path / "state.db") as store:
+        store.save_project(project())
+        store.save_project(ProjectRecord("demo-12345678", Path("/moved"), None, T0 + datetime.timedelta(days=1)))
+        assert store.get_project("demo-12345678") == ProjectRecord("demo-12345678", Path("/moved"), None, T0)
+        assert store.get_project("unknown") is None
+        store.save_project(project("another-00000000", "/other"))
+        assert [p.id for p in store.list_projects()] == ["another-00000000", "demo-12345678"]
+
+
+def test_run_lifecycle(tmp_path):
+    with SqliteStateStore(tmp_path / "state.db") as store:
+        store.save_project(project())
+        store.start_run(run("r1", rewind="d" * 40))
+        store.start_run(run("r2", minute=5))
+        assert [r.id for r in store.list_runs(unfinished_only=True)] == ["r1", "r2"]
+        store.finish_run("r1", T0 + datetime.timedelta(minutes=1), "planning_not_implemented")
+        [unfinished] = store.list_runs("demo-12345678", unfinished_only=True)
+        assert unfinished == run("r2", minute=5)
+        [finished, _] = store.list_runs("demo-12345678")
+        assert finished.finished_at == T0 + datetime.timedelta(minutes=1)
+        assert (finished.stop_reason, finished.rewind_from_sha) == ("planning_not_implemented", "d" * 40)
+        assert store.list_runs("other") == []
+
+
+def test_finishing_twice_or_unknown_run_is_an_error(tmp_path):
+    with SqliteStateStore(tmp_path / "state.db") as store:
+        store.save_project(project())
+        store.start_run(run("r1"))
+        store.finish_run("r1", T0, "done")
+        with pytest.raises(StoreError, match="run r1 is unknown or already finished"):
+            store.finish_run("r1", T0, "again")
+        with pytest.raises(StoreError, match="run nope is unknown"):
+            store.finish_run("nope", T0, "x")
+
+
+def test_run_requires_known_project(tmp_path):
+    with SqliteStateStore(tmp_path / "state.db") as store, pytest.raises(sqlite3.IntegrityError):
+        store.start_run(run("r1", project_id="missing"))

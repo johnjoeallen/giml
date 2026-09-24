@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
-from giml.core.model import SnapshotInfo
+from giml.core.model import ProjectRecord, RunRecord, SnapshotInfo
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 
@@ -60,6 +60,7 @@ class SqliteStateStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(path, isolation_level=None)
         try:
+            self._conn.execute("PRAGMA foreign_keys = ON")  # pragma: no mutate
             self._migrate(packaged_migrations() if migrations is None else validate_migrations(migrations))
         except BaseException:
             self._conn.close()
@@ -116,6 +117,74 @@ class SqliteStateStore:
             "ORDER BY fetched_at DESC, id DESC"  # pragma: no mutate
         ).fetchall()
         return [_snapshot_from_row(row) for row in rows]
+
+
+    def save_project(self, project: ProjectRecord) -> None:
+        """Insert a project, or refresh its path and remote hash if it is already known."""
+        self._conn.execute(
+            "INSERT INTO project (id, path, remote_url_hash, created_at) VALUES (?, ?, ?, ?) "  # pragma: no mutate
+            "ON CONFLICT (id) DO UPDATE SET path = excluded.path, remote_url_hash = excluded.remote_url_hash",  # pragma: no mutate
+            (project.id, str(project.path), project.remote_url_hash, _utc_text(project.created_at)),
+        )
+
+    def get_project(self, project_id: str) -> ProjectRecord | None:
+        row = self._conn.execute(
+            "SELECT id, path, remote_url_hash, created_at FROM project WHERE id = ?",  # pragma: no mutate
+            (project_id,),
+        ).fetchone()
+        return _project_from_row(row) if row else None
+
+    def list_projects(self) -> list[ProjectRecord]:
+        rows = self._conn.execute(
+            "SELECT id, path, remote_url_hash, created_at FROM project ORDER BY id"  # pragma: no mutate
+        ).fetchall()
+        return [_project_from_row(row) for row in rows]
+
+    def start_run(self, run: RunRecord) -> None:
+        self._conn.execute(
+            "INSERT INTO run (id, project_id, base_sha, branch, worktree_path, started_at, rewind_from_sha) "  # pragma: no mutate
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",  # pragma: no mutate
+            (run.id, run.project_id, run.base_sha, run.branch, str(run.worktree_path),
+             _utc_text(run.started_at), run.rewind_from_sha),
+        )  # fmt: skip
+
+    def finish_run(self, run_id: str, finished_at: datetime.datetime, stop_reason: str) -> None:
+        updated = self._conn.execute(
+            "UPDATE run SET finished_at = ?, stop_reason = ? WHERE id = ? AND finished_at IS NULL",  # pragma: no mutate
+            (_utc_text(finished_at), stop_reason, run_id),
+        ).rowcount
+        if updated != 1:
+            raise StoreError(f"run {run_id} is unknown or already finished")
+
+    def list_runs(self, project_id: str | None = None, unfinished_only: bool = False) -> list[RunRecord]:
+        clauses, params = [], []
+        if project_id is not None:
+            clauses.append("project_id = ?")  # pragma: no mutate
+            params.append(project_id)
+        if unfinished_only:
+            clauses.append("finished_at IS NULL")  # pragma: no mutate
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(
+            "SELECT id, project_id, base_sha, branch, worktree_path, started_at, finished_at, "  # pragma: no mutate
+            f"stop_reason, rewind_from_sha FROM run{where} ORDER BY started_at, id",  # pragma: no mutate
+            params,
+        ).fetchall()
+        return [_run_from_row(row) for row in rows]
+
+
+def _parse_time(text: str | None) -> datetime.datetime | None:
+    return datetime.datetime.fromisoformat(text) if text else None
+
+
+def _project_from_row(row: tuple) -> ProjectRecord:
+    project_id, path, remote_url_hash, created_at = row
+    return ProjectRecord(project_id, Path(path), remote_url_hash, _parse_time(created_at))
+
+
+def _run_from_row(row: tuple) -> RunRecord:
+    run_id, project_id, base_sha, branch, worktree, started, finished, stop_reason, rewind = row
+    return RunRecord(run_id, project_id, base_sha, branch, Path(worktree), _parse_time(started),
+                     _parse_time(finished), stop_reason, rewind)  # fmt: skip
 
 
 def _snapshot_from_row(row: tuple) -> SnapshotInfo:

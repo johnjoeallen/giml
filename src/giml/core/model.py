@@ -105,3 +105,24 @@ class SnapshotInfo:
     fetched_at: datetime.datetime
     content_hash: str
     path: Path
+
+
+@dataclass(frozen=True)
+class ProjectRecord:
+    id: str
+    path: Path
+    remote_url_hash: str | None
+    created_at: datetime.datetime
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    id: str
+    project_id: str
+    base_sha: str
+    branch: str
+    worktree_path: Path
+    started_at: datetime.datetime
+    finished_at: datetime.datetime | None = None
+    stop_reason: str | None = None
+    rewind_from_sha: str | None = None

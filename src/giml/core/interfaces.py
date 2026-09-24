@@ -6,10 +6,11 @@ are provisional and are finalised in the milestone named in their docstring.
 
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from giml.core.model import Coordinate, Finding, SnapshotInfo, VersionRelease
+from giml.core.model import Coordinate, Finding, ProjectRecord, RunRecord, SnapshotInfo, VersionRelease
 
 
 class StateStore(Protocol):
@@ -23,6 +24,24 @@ class StateStore(Protocol):
 
     def list_snapshots(self) -> list[SnapshotInfo]:
         """All recorded snapshots, newest first."""
+
+    def save_project(self, project: ProjectRecord) -> None:
+        """Insert a project, or refresh its path and remote hash (M2)."""
+
+    def get_project(self, project_id: str) -> ProjectRecord | None:
+        """A project by key (M2)."""
+
+    def list_projects(self) -> list[ProjectRecord]:
+        """All known projects (M2)."""
+
+    def start_run(self, run: RunRecord) -> None:
+        """Record a run as started (M2)."""
+
+    def finish_run(self, run_id: str, finished_at: datetime.datetime, stop_reason: str) -> None:
+        """Record a run as finished; runs never finished are crashed runs (M2)."""
+
+    def list_runs(self, project_id: str | None = None, unfinished_only: bool = False) -> list[RunRecord]:
+        """Runs, oldest first, optionally for one project or only unfinished (M2)."""
 
 
 class ResultCache(Protocol):
