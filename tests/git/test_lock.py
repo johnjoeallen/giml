@@ -48,3 +48,8 @@ def test_lock_held_by_another_process_is_released_when_it_dies(tmp_path):
     while is_locked(tmp_path, "proj") and time.monotonic() < deadline:
         time.sleep(0.01)
     assert not is_locked(tmp_path, "proj")
+
+
+def test_release_without_acquire_is_harmless(tmp_path):
+    ProjectLock(tmp_path, "proj").release()
+    assert not (tmp_path / "locks").exists()

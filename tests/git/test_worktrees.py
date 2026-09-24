@@ -11,7 +11,7 @@ from giml.git.worktrees import (
     IdentityError,
     WorktreeManager,
     commit_all,
-    developer_identity,
+    require_identity,
     result_branch,
 )
 from tests.git.repo_helpers import SINGLE_POM, commit_files, fingerprint, git, install_marker_hooks, make_repo
@@ -87,7 +87,7 @@ def test_commit_uses_developer_identity_trailer_and_no_hooks(repo, manager, tmp_
     install_marker_hooks(repo, marker)
     path = manager.create_result("giml/abc/x")
     (path / "pom.xml").write_text(SINGLE_POM.format(version="2.10.0"))
-    sha = commit_all(path, "[giml] bump jackson", developer_identity(repo))
+    sha = commit_all(path, "[giml] bump jackson")
     assert git(path, "log", "-1", "--format=%an <%ae>|%cn <%ce>") == "Dev Eloper <dev@example.test>|Dev Eloper <dev@example.test>"
     assert git(path, "log", "-1", "--format=%B").rstrip() == f"[giml] bump jackson\n\nGenerated-by: giml {__version__}"
     assert sha == git(path, "rev-parse", "HEAD")
@@ -100,7 +100,7 @@ def test_commit_is_never_signed_even_if_configured(repo, manager):
     git(repo, "config", "gpg.program", "/bin/false")  # signing would fail loudly
     path = manager.create_result("giml/abc/signed")
     (path / "pom.xml").write_text("changed")
-    commit_all(path, "change", developer_identity(repo))
+    commit_all(path, "change")
 
 
 @pytest.mark.parametrize("missing", ["user.name", "user.email"])
@@ -109,10 +109,26 @@ def test_missing_identity_is_reported(tmp_path, missing):
     other = "user.email" if missing == "user.name" else "user.name"
     git(repo, "config", other, "someone")
     with pytest.raises(IdentityError, match=f"git {missing} is not configured"):
-        developer_identity(repo)
+        require_identity(repo)
 
 
 def test_commits_on_developer_branch_after_worktree_do_not_interfere(repo, manager):
     path = manager.create_result("giml/abc/y")
     commit_files(repo, {"README": "later\n"}, "developer keeps working")
     assert git(path, "rev-parse", "HEAD") == manager.repo.base_sha
+
+
+def test_commit_message_is_normalised_before_the_trailer(repo, manager):
+    path = manager.create_result("giml/abc/msg")
+    (path / "pom.xml").write_text("changed")
+    commit_all(path, "  indented subject\n\n\n")
+    assert git(path, "log", "-1", "--format=%B").rstrip() == f"  indented subject\n\nGenerated-by: giml {__version__}"
+
+
+def test_trial_with_local_edits_is_still_removed_and_trials_share_a_root(repo, manager):
+    first = manager.create_trial(manager.repo.base_sha, 1)
+    second = manager.create_trial(manager.repo.base_sha, 2)
+    (first / "pom.xml").write_text("edited by a build")
+    (first / "target").mkdir()
+    manager.remove(first)
+    assert not first.exists() and second.exists()

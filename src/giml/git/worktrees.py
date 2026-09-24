@@ -33,27 +33,26 @@ def result_branch(base_sha: str, when: datetime.datetime, rewind: bool) -> str:
     return f"{prefix}/{base_sha[:7]}/{stamp}"
 
 
-def developer_identity(repo_root: Path) -> dict[str, str]:
-    """Author and committer environment from the developer's git config."""
+def require_identity(repo_root: Path) -> None:
+    """Check the developer's git identity exists before any work starts.
+
+    giml's commits use it as-is: worktrees share the repository's config, and the git wrapper
+    scrubs GIT_AUTHOR_* / GIT_COMMITTER_* from the environment, so config is the only source.
+    """
     git = Git(repo_root)
-    values = {}
     for key in ("user.name", "user.email"):
         result = git.run("config", "--get", key, check=False)
         if result.returncode != 0 or not result.stdout.strip():
             raise IdentityError(f"{repo_root}: git {key} is not configured; giml commits under your identity")
-        values[key] = result.stdout.strip()
-    name, email = values["user.name"], values["user.email"]
-    return {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email,
-            "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email}  # fmt: skip
 
 
-def commit_all(worktree: Path, message: str, identity: dict[str, str]) -> str:
+def commit_all(worktree: Path, message: str) -> str:
     """Commit every change in a giml worktree; returns the new commit SHA."""
     git = Git(worktree)
     git.run("add", "-A")
     full_message = f"{message.rstrip()}\n\nGenerated-by: giml {__version__}\n"
     # --no-gpg-sign: a signing prompt must never block an unattended run.
-    git.run("commit", "-q", "--no-gpg-sign", "-m", full_message, env=identity)
+    git.run("commit", "-q", "--no-gpg-sign", "-m", full_message)
     return git.out("rev-parse", "HEAD")
 
 

@@ -159,3 +159,19 @@ def test_lfs_is_refused(tmp_path, files):
 def test_gitattributes_without_lfs_is_fine(tmp_path):
     repo = make_repo(tmp_path / "repo", {"pom.xml": POM, ".gitattributes": "*.sh text eol=lf\n"})
     preflight(repo)
+
+
+def test_exactly_five_dirty_entries_have_no_more_suffix(repo):
+    for i in range(5):
+        (repo / f"f{i}").write_text("x")
+    with pytest.raises(PreflightRefusal) as exc:
+        preflight(repo)
+    assert str(exc.value).endswith("? f4")
+
+
+def test_gitlink_without_gitmodules_is_refused(repo):
+    sha = git(repo, "rev-parse", "HEAD")
+    git(repo, "update-index", "--add", "--cacheinfo", f"160000,{sha},vendored")
+    git(repo, "commit", "-q", "-m", "gitlink only")
+    (repo / "vendored").mkdir()  # an uninitialised submodule is an empty directory
+    refused(repo, "submodules are unsupported")

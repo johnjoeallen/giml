@@ -2,7 +2,7 @@ import pytest
 
 from giml.git.preflight import preflight
 from giml.git.rewind import RewindError, apply_rewind, pom_path, resolve_rewind
-from giml.git.worktrees import WorktreeManager, developer_identity
+from giml.git.worktrees import WorktreeManager
 from tests.git.repo_helpers import SINGLE_POM, commit_files, fingerprint, git, make_repo
 
 
@@ -30,7 +30,7 @@ def test_rewind_commits_only_the_old_pom(history, tmp_path):
     target = resolve_rewind(state, "HEAD~2")
     assert target.sha == old and target.pom_path == "pom.xml"
     assert target.committed_at == "2025-01-02T03:04:05Z"
-    sha = apply_rewind(worktree, target, developer_identity(repo))
+    sha = apply_rewind(worktree, target)
 
     assert git(worktree, "diff", "--name-only", f"{state.base_sha}..{sha}") == "pom.xml"
     assert (worktree / "pom.xml").read_text() == SINGLE_POM.format(version="2.9.8")
@@ -49,7 +49,7 @@ def test_rewind_preserves_bytes_including_crlf(tmp_path):
     git(repo, "commit", "-q", "-m", "crlf")
     commit_files(repo, {"pom.xml": SINGLE_POM.format(version="2.0")}, "lf")
     state, worktree = workspace(repo, tmp_path)
-    apply_rewind(worktree, resolve_rewind(state, "HEAD~1"), developer_identity(repo))
+    apply_rewind(worktree, resolve_rewind(state, "HEAD~1"))
     assert (worktree / "pom.xml").read_bytes() == crlf.encode()
 
 
@@ -60,7 +60,7 @@ def test_rewind_in_subdirectory_project(tmp_path):
     state = preflight(repo / "svc")
     assert pom_path(state) == "svc/pom.xml"
     worktree = WorktreeManager(state, tmp_path / "state", "run-1").create_result("giml/rewind/a/b")
-    sha = apply_rewind(worktree, resolve_rewind(state, "HEAD~1"), developer_identity(repo))
+    sha = apply_rewind(worktree, resolve_rewind(state, "HEAD~1"))
     assert git(worktree, "diff", "--name-only", f"{state.base_sha}..{sha}") == "svc/pom.xml"
 
 

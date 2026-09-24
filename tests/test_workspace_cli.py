@@ -286,3 +286,52 @@ def test_push_cannot_happen_through_any_giml_command(repo, cli, monkeypatch):
     assert cli("clean", repo, "--branches") == ExitCode.SUCCESS
     git_calls = [c for c in calls if c and c[0] == "git"]
     assert git_calls and not any("push" in c for c in git_calls)
+
+
+def test_run_ids_are_utc_timestamps_with_a_random_suffix():
+    from giml.workspace import new_run_id
+
+    plus_two = datetime.timezone(datetime.timedelta(hours=2))
+    run_id = new_run_id(datetime.datetime(2026, 9, 24, 14, 5, 6, tzinfo=plus_two))
+    assert re.fullmatch(r"20260924T120506Z-[0-9a-f]{6}", run_id)
+
+
+def test_project_without_origin_has_no_remote_hash(tmp_path, cli):
+    repo = make_repo(tmp_path / "local", {"pom.xml": SINGLE_POM.format(version="1.0")})
+    assert cli("plan", repo) == ExitCode.SUCCESS
+    with store(cli) as s:
+        assert s.list_projects()[0].remote_url_hash is None
+
+
+def test_planning_one_project_never_marks_another_projects_active_run(repo, cli, tmp_path):
+    other = make_repo(tmp_path / "other", {"pom.xml": SINGLE_POM.format(version="1.0")})
+    assert cli("plan", other) == ExitCode.SUCCESS
+    other_key = preflight(other).project_key
+    with store(cli) as s:
+        s._conn.execute("UPDATE run SET finished_at = NULL, stop_reason = NULL")  # other's run is "active"
+    with ProjectLock(cli.state, other_key):
+        assert cli("plan", repo) == ExitCode.SUCCESS
+    with store(cli) as s:
+        [other_run] = s.list_runs(other_key)
+    assert other_run.finished_at is None and other_run.stop_reason is None
+
+
+def test_clean_marks_crashed_runs_itself(repo, cli):
+    assert cli("plan", repo) == ExitCode.SUCCESS
+    with store(cli) as s:
+        s._conn.execute("UPDATE run SET finished_at = NULL, stop_reason = NULL")
+    assert cli("clean", repo) == ExitCode.SUCCESS
+    with store(cli) as s:
+        assert [r.stop_reason for r in s.list_runs()] == ["crashed"]
+
+
+def test_clean_branches_continues_past_already_deleted_ones(repo, cli, capsys):
+    assert cli("plan", repo) == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.SUCCESS
+    with store(cli) as s:
+        first, second = s.list_runs()
+    assert cli("clean", repo) == ExitCode.SUCCESS
+    git(repo, "branch", "-D", first.branch)
+    capsys.readouterr()
+    assert cli("clean", repo, "--branches") == ExitCode.SUCCESS
+    assert capsys.readouterr().out.splitlines() == [f"deleted branch {second.branch}"]

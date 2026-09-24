@@ -17,7 +17,7 @@ from giml.git.lock import LockHeld, ProjectLock, is_locked
 from giml.git.preflight import RepoState, locate, preflight, project_key
 from giml.git.rewind import RewindTarget, apply_rewind, resolve_rewind
 from giml.git.runner import Git
-from giml.git.worktrees import WorktreeManager, developer_identity, remove_worktree, result_branch
+from giml.git.worktrees import WorktreeManager, remove_worktree, require_identity, result_branch
 from giml.maven.project import check_single_module
 from giml.store.sqlite_store import SqliteStateStore
 
@@ -71,7 +71,7 @@ def set_up(
     repo = preflight(path, allow_detached)
     check_single_module(repo.project_dir)
     rewind = resolve_rewind(repo, rewind_to) if rewind_to else None
-    identity = developer_identity(repo.root)
+    require_identity(repo.root)
 
     with ProjectLock(state_dir, repo.project_key):
         now = clock()
@@ -86,7 +86,7 @@ def set_up(
         try:
             worktree = manager.create_result(branch)
             if rewind is not None:
-                apply_rewind(worktree, rewind, identity)
+                apply_rewind(worktree, rewind)
         except BaseException:
             store.finish_run(run_id, clock(), STOP_SETUP_FAILED)
             raise
@@ -105,8 +105,8 @@ def stale_runs(state_dir: Path, store: SqliteStateStore) -> list[StaleRun]:
     stale = []
     for run in store.list_runs(unfinished_only=True):
         if not is_locked(state_dir, run.project_id):
-            project = store.get_project(run.project_id)
-            stale.append(StaleRun(run, project.path if project else Path("?")))
+            # run.project_id is a foreign key, so the project always exists.
+            stale.append(StaleRun(run, store.get_project(run.project_id).path))
     return stale
 
 

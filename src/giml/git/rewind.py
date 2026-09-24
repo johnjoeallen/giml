@@ -46,7 +46,7 @@ def resolve_rewind(repo: RepoState, commit: str) -> RewindTarget:
     return RewindTarget(sha, git.out("log", "-1", "--format=%cI", sha), path)
 
 
-def apply_rewind(worktree: Path, target: RewindTarget, identity: dict[str, str]) -> str:
+def apply_rewind(worktree: Path, target: RewindTarget) -> str:
     """Replace pom.xml in a result worktree with its rewound content and commit it; returns the SHA."""
     git = Git(worktree)
     # restore (not a Python read/write) keeps the file byte-for-byte, line endings included.
@@ -57,4 +57,4 @@ def apply_rewind(worktree: Path, target: RewindTarget, identity: dict[str, str])
         "Synthetic: this recreates an older dependency state from history for testing and training\n"
         "(giml spec 5.3). Every other file is unchanged from the base commit."
     )
-    return commit_all(worktree, message, identity)
+    return commit_all(worktree, message)
