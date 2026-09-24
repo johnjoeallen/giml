@@ -91,7 +91,7 @@ Target project requirements and quality tooling:
 - A working Maven build on a JDK the developer has installed, with unit tests (Surefire). These are true prerequisites: giml cannot supply them. Which JDK giml builds with is chosen as in section 3.1.
 - **Quality tooling** (below) is needed for assessment and verification. A developer does **not** have to configure it first (confirmed 2026-09-24). Where the project lacks any of it, giml adds it in its own worktree only, as a separate, clearly marked setup commit on the result branch (`[giml-setup] ...`), using plugin versions pinned by giml. The developer's checkout is never touched (hard rule 2). The setup commit makes assessment possible; if the project then scores below a tier, the report says so and the branch is still left for review, so the developer can take the setup commit back to their own branch and raise the scores.
 - Quality tooling: **JaCoCo** producing `jacoco.xml`, and **pitest-maven** producing XML. When giml adds PIT it excludes Failsafe-named integration tests (`IT*`, `*IT`, `*ITCase`), as Surefire does: tiers measure unit tests, and an integration test may need a packaged artifact.
-- Quality tooling: **maven-enforcer-plugin** bound to the build with all three duplicate/convergence bans (confirmed 2026-09-24): `banDuplicateClasses` (from `org.codehaus.mojo:extra-enforcer-rules`), `banDuplicatePomDependencyVersions` and `dependencyConvergence`. These make duplicate classes and version conflicts fail the build, which the planner relies on (failure classes `duplicate_classes`, `enforcer_convergence`).
+- Quality tooling: **maven-enforcer-plugin** bound to the build with all three duplicate/convergence bans (confirmed 2026-09-24): `banDuplicateClasses` (from `org.codehaus.mojo:extra-enforcer-rules`), `banDuplicatePomDependencyVersions` and `dependencyConvergence`. A clean enforcer run is required to **finish** a plan successfully, not to **start** one (decided 2026-09-24): violations at the base commit are recorded (`assess` records the failing rules; the M4 baseline also records the offending artifacts), and fixing them is giml's job (sections 8.2, 8.5, 9.1). Failure classes `duplicate_classes` and `enforcer_convergence`.
 - Optional: integration tests (Failsafe / `*IT`).
 - Single-module projects and multi-module reactors are both supported. The reactor is the project's `pom.xml` plus every module it declares (at top level or in profiles), recursively. A declared module whose `pom.xml` is missing is a configuration error (exit 5); a module outside the project directory is unsupported (exit 3). In a reactor the prerequisites may be declared in the parent and inherited.
 - Missing quality tooling is added as above and listed in the report. Only a missing true prerequisite (no Maven build, no unit tests) stops `assess` and `plan`, with exit code 5.
@@ -372,6 +372,8 @@ For each dependency version that is *declared or managed* in the project, build 
 4. `bom_managed`: the version managed by the project's parent/BOM (e.g. Spring Boot) after any parent upgrade.
 5. `latest`: newest overall release.
 
+Enforcer violations at the base commit are planning goals too: for each `dependencyConvergence` or `banDuplicatePomDependencyVersions` violation, candidates include a `dependencyManagement` pin (section 8.4) at each version in conflict and at the newest permitted version, and version changes to the dependencies that pull in the conflicting versions. A `banDuplicateClasses` violation that only an exclusion could fix is out of scope (section 8.4 allows version edits and pins only) and is reported as unresolved.
+
 Parent/BOM upgrades (for example the Spring Boot parent) are first-class candidates; they change many managed versions at once and are treated as a single change unit.
 
 ### 8.3 Joint planning algorithm
@@ -396,7 +398,9 @@ Stop conditions (first that occurs): no untried candidate set improves the ranki
 
 ### 8.5 Ranking ("best" state)
 
-A candidate state is only eligible if it passes all required verification stages. Eligible states are ranked lexicographically by an **objective profile** (configurable in config):
+A candidate state is only eligible if it passes all required verification stages; for the enforcer, that means it adds no violation absent at the base commit (section 9.1). A plan **succeeds only if its final state passes the enforcer cleanly**. So in every profile, fewer remaining enforcer violations ranks first, ahead of the profile's objectives, and a run that cannot remove them all ends without success (exit 1, section 13): the result branch still holds the verified progress and the report lists each remaining violation with the reason it could not be fixed.
+
+Eligible states are ranked lexicographically by an **objective profile** (configurable in config):
 
 `cve_first` (default):
 1. Lowest CVE exposure over the **fully resolved tree**: maximum severity remaining, then count of vulnerabilities at that severity, then total count (OSV severity data).
@@ -431,7 +435,7 @@ Extra signals (recorded as features, not gates, in phase 1): API diff (japicmp) 
 
 ### 9.1 Baseline
 
-Before any candidate, run the full pipeline on the **unmodified base commit**. If any required stage fails at baseline, that stage is marked `baseline_failed` and is **not used as an oracle** in the run; the report says so. If build or unit tests fail at baseline, stop: the project is not upgradeable until fixed.
+Before any candidate, run the full pipeline on the **unmodified base commit**. If any required stage fails at baseline, that stage is marked `baseline_failed` and is **not used as an oracle** in the run; the report says so. The enforcer is the exception: its baseline violations (rule and offending artifacts) become the reference set, a candidate fails `enforcer_convergence` or `duplicate_classes` only on a violation outside that set, and removing violations is a goal (section 8.5). If build or unit tests fail at baseline, stop: the project is not upgradeable until fixed.
 
 ### 9.2 Isolation
 
@@ -545,7 +549,7 @@ giml clean [--all] [--branches]              remove worktrees (and optionally br
 
 `--dry-run` performs preflight, assessment, and planning without building (lists candidate sets and reasons).
 
-Exit codes: 0 success (plan produced), 1 no improvement found, 2 preflight refusal, 3 ineligible (tier/gate, or unsupported project shape such as a module outside the project directory), 4 infrastructure failure, 5 configuration error.
+Exit codes: 0 success (plan produced, enforcer clean), 1 no improvement found or the enforcer could not be made clean (verified progress is still left on the branch), 2 preflight refusal, 3 ineligible (tier/gate, or unsupported project shape such as a module outside the project directory), 4 infrastructure failure, 5 configuration error.
 
 ---
 
@@ -626,7 +630,7 @@ Work in order; stop at each checkpoint.
 
 **M5 — Deterministic planner (est. 2–3 weeks)**
 - Resolution via the dependency plugin's JSON output, candidate generation (section 8.2), lossless POM edits, joint search with delta-debugging isolation and re-promotion, ranking profiles, deferrals with triggers, japicmp-based candidate filtering, dry-run mode, naive-baseline comparison, result-branch commits, report generation including the rewind comparison (section 5.3).
-- Acceptance: on at least three real projects (including one deliberately behind on dependencies) the plan is produced with evidence; POM diffs of accepted steps touch only versions; at least one project is run in rewind mode and its report compares giml's result with the base commit's versions; comparison with the naive baseline shows builds, pass rate and CVEs cleared; no CVE is silently left open by a pin.
+- Acceptance: on at least three real projects (including one deliberately behind on dependencies) the plan is produced with evidence; POM diffs of accepted steps touch only versions; at least one project is run in rewind mode and its report compares giml's result with the base commit's versions; comparison with the naive baseline shows builds, pass rate and CVEs cleared; no CVE is silently left open by a pin; a project whose base commit fails `dependencyConvergence` (arete) ends with a clean enforcer run, or the report says exactly which violations remain and why.
 
 **M6 — Startup verification (est. 1–2 weeks)**
 - Settings loader/validator (section 12.1), smoke runner (12.2), PostgreSQL lifecycle (12.3), baseline handling, integration into the pipeline and tier evaluation.

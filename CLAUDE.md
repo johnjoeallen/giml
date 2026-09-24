@@ -61,6 +61,7 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-24: A clean enforcer run is required to finish a plan, not to start one. Baseline violations are recorded and become planning goals (pins per §8.4); candidates may not add violations; fewer violations ranks first in every profile; a run left with violations exits 1 with its progress on the branch. User instruction.
 - 2026-09-24: Tier numbers stay at gate config version 3 (spec Q7); the survey projects were too far below Tier B to calibrate boundaries. Policy's 80% = PIT mutation coverage, 85% = test strength (Q8), as Tier B already says. User answers.
 - 2026-09-24: Initial project set: redkite, arete and grip (spec Q6, M3 part), the user's own GitHub projects with unit tests; chronograf dropped. The deliberately-behind project for M5 is still open.
 - 2026-09-24: JDK choice (spec §3.1): project `.giml/settings.yml` gives `jdk` (major or full version) or `java_home`; versions resolve via global `~/.giml/config.yml` `jdks`, then `~/.m2/toolchains.xml`; no settings means inherited JAVA_HOME. The global config knows nothing about projects. A repo-named `java_home` is accepted if it has `bin/javac` (a deliberate exception to hard rule 5). User choice; found when chronograf (Lombok 1.18.32) failed on JDK 25.
