@@ -54,13 +54,14 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 - State DB: `<state>/state.db`; migrations 0001 (`snapshot`) and 0002 (`project`, `run` with only the columns used so far). Other spec §11 tables and columns arrive with their milestones.
 - `src/giml/git/` holds the git wrapper, preflight, lock, worktrees and rewind; `src/giml/workspace.py` orchestrates `plan` (M2 stub), `clean` and crashed-run detection. `src/giml/maven/project.py` discovers the reactor (root pom plus modules, including profile modules).
 - `src/giml/gate/` holds tooling setup, report collectors, tiers and `assess`; `src/giml/maven/runner.py` runs Maven; `src/giml/maven/jdk.py` chooses the JDK (spec §3.1). `scripts/survey.py` tabulates assessments across projects.
-- Config files: gate config (package), global `~/.giml/config.yml` (`jdks` only), project `.giml/settings.yml` (`jdk` or `java_home`), all parsed in `src/giml/core/config.py`.
+- Config files: gate config (package), global `~/.giml/config.yml` (`jdks` only), project `.giml/settings.yml` (`jdk` or `java_home`, `allow_exclusions`), all parsed in `src/giml/core/config.py`.
 - Platform requirements and how giml stays out of the developer's checkout: `docs/platform.md`.
 
 ## Decisions log
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-24: The planner may add `<exclusion>`s to fix enforcer violations only when the project's `.giml/settings.yml` sets `allow_exclusions: true` (default false); parsed now, used from M5 (spec §8.4). User choice.
 - 2026-09-24: A clean enforcer run is required to finish a plan, not to start one. Baseline violations are recorded and become planning goals (pins per §8.4); candidates may not add violations; fewer violations ranks first in every profile; a run left with violations exits 1 with its progress on the branch. User instruction.
 - 2026-09-24: Tier numbers stay at gate config version 3 (spec Q7); the survey projects were too far below Tier B to calibrate boundaries. Policy's 80% = PIT mutation coverage, 85% = test strength (Q8), as Tier B already says. User answers.
 - 2026-09-24: Initial project set: redkite, arete and grip (spec Q6, M3 part), the user's own GitHub projects with unit tests; chronograf dropped. The deliberately-behind project for M5 is still open.

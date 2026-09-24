@@ -300,3 +300,19 @@ def test_project_settings_errors(tmp_path, text, error):
     write(tmp_path / ".giml" / "settings.yml", text)
     with pytest.raises(ConfigError, match=error):
         load_project_settings(tmp_path)
+
+
+def test_project_settings_allow_exclusions(tmp_path):
+    assert load_project_settings(tmp_path).allow_exclusions is False
+    write(tmp_path / ".giml" / "settings.yml", "jdk: 21\nallow_exclusions: true\n")
+    settings = load_project_settings(tmp_path)
+    assert (settings.jdk, settings.allow_exclusions) == ("21", True)
+    write(tmp_path / ".giml" / "settings.yml", "allow_exclusions: false\n")
+    assert load_project_settings(tmp_path).allow_exclusions is False
+
+
+@pytest.mark.parametrize("value", ["yes please", "1", "[]"])
+def test_project_settings_allow_exclusions_must_be_a_boolean(tmp_path, value):
+    write(tmp_path / ".giml" / "settings.yml", f"allow_exclusions: {value}\n")
+    with pytest.raises(ConfigError, match=r"settings\.yml\.allow_exclusions: expected true or false"):
+        load_project_settings(tmp_path)

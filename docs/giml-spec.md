@@ -129,6 +129,8 @@ A project may need a JDK other than the developer's default (for example, an old
   - `jdk`: a major (`17`) or full (`"17.0.16"`) version;
   - `java_home`: a JDK directory, accepted if it has `bin/javac`.
 
+  It may also hold `allow_exclusions: true|false` (default false), which lets the planner add `<exclusion>` entries to fix enforcer violations (section 8.4).
+
 Resolution: a `java_home` is used as is. A `jdk` version is matched against the global `jdks`, then against the `jdk` toolchains in Maven's `~/.m2/toolchains.xml` (each entry's `release` file, else its declared version; unusable entries are skipped). `17` matches any 17.x and a full version only itself; Java 8 style `1.8.0_392` reads as `8.0.392`. The highest matching version wins, the first listed on a tie. No match is a configuration error (exit 5); giml never builds silently with a different JDK. Without project settings, giml inherits the developer's `JAVA_HOME` and `PATH`.
 
 The chosen JDK is exported as `JAVA_HOME`, with its `bin` first on `PATH`, for every Maven and `java` call, and is recorded (version, home, source) in the assessment result (section 6.4).
@@ -372,7 +374,7 @@ For each dependency version that is *declared or managed* in the project, build 
 4. `bom_managed`: the version managed by the project's parent/BOM (e.g. Spring Boot) after any parent upgrade.
 5. `latest`: newest overall release.
 
-Enforcer violations at the base commit are planning goals too: for each `dependencyConvergence` or `banDuplicatePomDependencyVersions` violation, candidates include a `dependencyManagement` pin (section 8.4) at each version in conflict and at the newest permitted version, and version changes to the dependencies that pull in the conflicting versions. A `banDuplicateClasses` violation that only an exclusion could fix is out of scope (section 8.4 allows version edits and pins only) and is reported as unresolved.
+Enforcer violations at the base commit are planning goals too: for each `dependencyConvergence` or `banDuplicatePomDependencyVersions` violation, candidates include a `dependencyManagement` pin (section 8.4) at each version in conflict and at the newest permitted version, and version changes to the dependencies that pull in the conflicting versions. When the project's settings set `allow_exclusions: true` (section 3.1), candidates also include excluding the offending transitive artifact from the dependency that pulls it in; without it, a violation that only an exclusion could fix (typically `banDuplicateClasses`) is reported as unresolved.
 
 Parent/BOM upgrades (for example the Spring Boot parent) are first-class candidates; they change many managed versions at once and are treated as a single change unit.
 
@@ -391,9 +393,10 @@ Stop conditions (first that occurs): no untried candidate set improves the ranki
 
 ### 8.4 Editing POMs
 
-- Edit **only version values** (and add `dependencyManagement` pins when required), at the location where the version is actually declared: direct `<version>`, a property, `dependencyManagement`, or the parent version.
+- Edit **only version values** (and add `dependencyManagement` pins when required, and `<exclusion>` entries when the project allows them, see below), at the location where the version is actually declared: direct `<version>`, a property, `dependencyManagement`, or the parent version.
 - Use lossless, minimal text edits so formatting and comments are untouched. Never re-serialise the whole POM.
 - Multi-module reactors: edit in the module that declares the version (often the reactor parent's `dependencyManagement` or `<properties>`), resolving inheritance within the reactor. If a declaration site cannot be determined inside the reactor (for example it comes only from an external parent or BOM), report "unsupported" for that dependency and leave it unchanged, except where the external parent version itself is the declaration site.
+- **Exclusions** (decided 2026-09-24), only when `.giml/settings.yml` sets `allow_exclusions: true`: to fix an enforcer violation, add an `<exclusion>` of the offending transitive artifact to the declaring dependency, in the module that declares it. An exclusion is a change unit like any other: it must pass every verification stage, its commit names the violation it fixes, and the report lists every exclusion added. An exclusion that removes classes the tests still need fails verification and is dropped.
 - Every pin/deferral records a **reason** and a **re-evaluation trigger** (new release of the dependency, new advisory, POM change).
 
 ### 8.5 Ranking ("best" state)
@@ -630,7 +633,7 @@ Work in order; stop at each checkpoint.
 
 **M5 — Deterministic planner (est. 2–3 weeks)**
 - Resolution via the dependency plugin's JSON output, candidate generation (section 8.2), lossless POM edits, joint search with delta-debugging isolation and re-promotion, ranking profiles, deferrals with triggers, japicmp-based candidate filtering, dry-run mode, naive-baseline comparison, result-branch commits, report generation including the rewind comparison (section 5.3).
-- Acceptance: on at least three real projects (including one deliberately behind on dependencies) the plan is produced with evidence; POM diffs of accepted steps touch only versions; at least one project is run in rewind mode and its report compares giml's result with the base commit's versions; comparison with the naive baseline shows builds, pass rate and CVEs cleared; no CVE is silently left open by a pin; a project whose base commit fails `dependencyConvergence` (arete) ends with a clean enforcer run, or the report says exactly which violations remain and why.
+- Acceptance: on at least three real projects (including one deliberately behind on dependencies) the plan is produced with evidence; POM diffs of accepted steps touch only versions, `dependencyManagement` pins and, where the project allows them, exclusions (section 8.4); at least one project is run in rewind mode and its report compares giml's result with the base commit's versions; comparison with the naive baseline shows builds, pass rate and CVEs cleared; no CVE is silently left open by a pin; a project whose base commit fails `dependencyConvergence` (arete) ends with a clean enforcer run, or the report says exactly which violations remain and why.
 
 **M6 — Startup verification (est. 1–2 weeks)**
 - Settings loader/validator (section 12.1), smoke runner (12.2), PostgreSQL lifecycle (12.3), baseline handling, integration into the pipeline and tier evaluation.

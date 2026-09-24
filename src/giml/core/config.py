@@ -297,6 +297,7 @@ class ProjectSettings:
     path: Path
     jdk: str | None = None  # a major ("17") or full ("17.0.16") version
     java_home: Path | None = None
+    allow_exclusions: bool = False  # may the planner add <exclusion>s to fix enforcer violations (spec 8.4)
 
 
 def project_settings_path(project_dir: Path) -> Path:
@@ -312,7 +313,12 @@ def load_project_settings(project_dir: Path) -> ProjectSettings:
     root = _Section(data, f"{path}")
     jdk = root.optional("jdk")
     java_home = root.optional("java_home")
+    allow_exclusions = root.optional("allow_exclusions")
     root.finish()
+    if allow_exclusions is None:
+        allow_exclusions = False
+    elif not isinstance(allow_exclusions, bool):
+        raise ConfigError(f"{path}.allow_exclusions: expected true or false, got {allow_exclusions!r}")
     if jdk is not None and java_home is not None:
         raise ConfigError(f"{path}: set jdk or java_home, not both")
     if jdk is not None:
@@ -322,4 +328,4 @@ def load_project_settings(project_dir: Path) -> ProjectSettings:
         jdk = str(jdk)
     if java_home is not None:
         java_home = _absolute_path(java_home, f"{path}.java_home")
-    return ProjectSettings(path, jdk, java_home)
+    return ProjectSettings(path, jdk, java_home, allow_exclusions)
