@@ -64,7 +64,7 @@ Later the same engine will run centrally, from CI, and open PRs. Therefore all e
 2. **Never modify the developer's working tree, index or current branch.** All work happens in tool-owned worktrees.
 3. **Refuse to start on a dirty repository** (section 5.1).
 4. **No AI API calls.** giml never calls a hosted AI/LLM API (at build time, run time, or to generate or label data), verified by a test. Other network access is allowed; planning still reads only recorded data snapshots (section 7.3) so runs stay reproducible.
-5. **Never execute commands taken from repository files.** Repo files may declare *data* (profile name, readiness hints) but never *what to run*.
+5. **Never execute commands taken from repository files.** Repo files may declare *data* (profile name, readiness hints) but never *what to run*. One deliberate exception (decided 2026-09-24): a project's `.giml/settings.yml` may name a `java_home`, and giml builds with that JDK if the directory looks like one (has `bin/javac`); see section 3.1.
 6. **Never log or report secret values.** Record environment variable *names* only.
 7. **Verification rules come from the base commit**, never from a candidate state, so an upgrade cannot change its own checks.
 8. **Every suggestion is verified by a real build.** ML output is a prior for ordering and abstention, never a verdict.
@@ -88,7 +88,7 @@ Confirmed 2026-09-24 (was CONFIRM item 1):
 
 Target project requirements and quality tooling:
 
-- A working Maven build on a JDK the developer has installed, with unit tests (Surefire). These are true prerequisites: giml cannot supply them.
+- A working Maven build on a JDK the developer has installed, with unit tests (Surefire). These are true prerequisites: giml cannot supply them. Which JDK giml builds with is chosen as in section 3.1.
 - **Quality tooling** (below) is needed for assessment and verification. A developer does **not** have to configure it first (confirmed 2026-09-24). Where the project lacks any of it, giml adds it in its own worktree only, as a separate, clearly marked setup commit on the result branch (`[giml-setup] ...`), using plugin versions pinned by giml. The developer's checkout is never touched (hard rule 2). The setup commit makes assessment possible; if the project then scores below a tier, the report says so and the branch is still left for review, so the developer can take the setup commit back to their own branch and raise the scores.
 - Quality tooling: **JaCoCo** producing `jacoco.xml`, and **pitest-maven** producing XML.
 - Quality tooling: **maven-enforcer-plugin** bound to the build with all three duplicate/convergence bans (confirmed 2026-09-24): `banDuplicateClasses` (from `org.codehaus.mojo:extra-enforcer-rules`), `banDuplicatePomDependencyVersions` and `dependencyConvergence`. These make duplicate classes and version conflicts fail the build, which the planner relies on (failure classes `duplicate_classes`, `enforcer_convergence`).
@@ -119,6 +119,19 @@ giml/
   config/              default gate-config.yaml
   docs/                giml-spec.md and further docs
 ```
+
+### 3.1 Choosing the JDK
+
+A project may need a JDK other than the developer's default (for example, an older Lombok that fails to compile on a newer JDK). Two files, both optional and strict (unknown or duplicate keys are errors, exit 5):
+
+- **Global config** `~/.giml/config.yml` (`--config FILE` overrides): the developer's own settings. It knows nothing about projects. Today it holds only `jdks`, a list of JDK home directories (absolute or `~`); each must contain `bin/javac` and a `release` file giving `JAVA_VERSION`.
+- **Project settings** `.giml/settings.yml` in the project directory, committed with the project and read from giml's worktree (the base commit, hard rule 7). It holds at most one of:
+  - `jdk`: a major (`17`) or full (`"17.0.16"`) version;
+  - `java_home`: a JDK directory, accepted if it has `bin/javac`.
+
+Resolution: a `java_home` is used as is. A `jdk` version is matched against the global `jdks`, then against the `jdk` toolchains in Maven's `~/.m2/toolchains.xml` (each entry's `release` file, else its declared version; unusable entries are skipped). `17` matches any 17.x and a full version only itself; Java 8 style `1.8.0_392` reads as `8.0.392`. The highest matching version wins, the first listed on a tie. No match is a configuration error (exit 5); giml never builds silently with a different JDK. Without project settings, giml inherits the developer's `JAVA_HOME` and `PATH`.
+
+The chosen JDK is exported as `JAVA_HOME`, with its `bin` first on `PATH`, for every Maven and `java` call, and is recorded (version, home, source) in the assessment result (section 6.4).
 
 ---
 
@@ -282,7 +295,8 @@ Persisted and printed as JSON:
   "declared_tier": "A",
   "passed_tier": "B",
   "config_version": 2,
-  "tools": {"pit": "x.y.z", "jacoco": "x.y.z", "jdk": "21"},
+  "tools": {"pit": "x.y.z", "jacoco": "x.y.z",
+            "jdk": {"version": "21.0.9", "home": "/path/to/jdk", "source": "global config|maven toolchains|settings java_home|inherited"}},
   "measured": {
     "unit_line_coverage": 91.2,
     "unit_branch_coverage": 78.0,
@@ -506,6 +520,7 @@ Opt-in list of endpoint checks (method, path, expected status) in the settings f
 ## 13. CLI
 
 ```
+giml [--state-dir DIR] [--config FILE] COMMAND   global options (section 3.1 for --config)
 giml sync [--osv] [--central]               fetch/refresh snapshots (network allowed)
 giml status                                  snapshot ages, state dir, stale worktrees
 giml assess <path> [--declared-tier X]       run gate assessment, print/store result

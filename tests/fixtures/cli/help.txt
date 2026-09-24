@@ -1,4 +1,4 @@
-usage: giml [-h] [--version] [--state-dir STATE_DIR] COMMAND ...
+usage: giml [-h] [--version] [--state-dir STATE_DIR] [--config FILE] COMMAND ...
 
 Gated Increments (ML)
 
@@ -15,3 +15,4 @@ options:
   --version             show program's version number and exit
   --state-dir STATE_DIR
                         state directory (default: $GIML_STATE_DIR or ~/.giml)
+  --config FILE         global config (default: ~/.giml/config.yml)

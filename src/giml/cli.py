@@ -26,6 +26,7 @@ from giml.core.config import ConfigError, default_gate_config_path, load_gate_co
 from giml.gate.assess import JavaRunner, MavenRunner, PrerequisiteError, UnknownTierError, run_java
 from giml.gate.assess import assess as assess_project
 from giml.gate.reports import ReportError
+from giml.maven.jdk import catalog
 from giml.maven.runner import MavenNotFound, run_maven
 from giml.git.lock import LockHeld
 from giml.git.preflight import PreflightRefusal
@@ -71,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="giml", description="Gated Increments (ML)")
     parser.add_argument("--version", action="version", version=f"giml {__version__}")
     parser.add_argument("--state-dir", type=Path, help="state directory (default: $GIML_STATE_DIR or ~/.giml)")
+    parser.add_argument("--config", type=Path, metavar="FILE", help="global config (default: ~/.giml/config.yml)")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     sync = commands.add_parser("sync", help="fetch/refresh data snapshots (network)")
@@ -204,8 +206,9 @@ def cmd_assess(args: argparse.Namespace, env: Environment, store: SqliteStateSto
     config = load_gate_config(args.gate_config or default_gate_config_path())
     for warning in config.warnings:
         print(f"warning: {warning}", file=sys.stderr)
+    jdks = catalog(args.config)
     outcome = assess_project(args.path, root, store, env.clock, config, args.declared_tier,
-                             maven=env.maven, java=env.java)  # fmt: skip
+                             maven=env.maven, java=env.java, jdks=jdks, environ=env.environ)  # fmt: skip
     result = outcome.result
     print(json.dumps(result, indent=2, sort_keys=True))
     print(f"branch: {outcome.branch}", file=sys.stderr)

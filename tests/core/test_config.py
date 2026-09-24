@@ -1,9 +1,13 @@
 import datetime
+from pathlib import Path
 
 import pytest
 import yaml
 
-from giml.core.config import ConfigError, default_gate_config_path, load_gate_config, parse_gate_config
+from giml.core.config import (
+    ConfigError, GlobalConfig, ProjectSettings, default_gate_config_path, load_gate_config, load_global_config,
+    load_project_settings, parse_gate_config,
+)  # fmt: skip
 
 DEFAULT_CONFIG = default_gate_config_path()
 
@@ -224,3 +228,75 @@ def test_verification_stages_can_be_switched_off():
     data["verification"] = {"integration_tests": "off", "startup_check": "off"}
     config = parse(data)
     assert (config.verification.integration_tests, config.verification.startup_check) == ("off", "off")
+
+
+def write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_global_config_missing_or_empty_means_no_jdks(tmp_path):
+    assert load_global_config(tmp_path / "absent.yml") == GlobalConfig()
+    assert load_global_config(write(tmp_path / "empty.yml", "")) == GlobalConfig()
+
+
+def test_global_config_lists_jdk_homes_with_home_expansion(tmp_path):
+    config = load_global_config(write(tmp_path / "c.yml", "jdks:\n  - /opt/jdk-17\n  - ~/jdks/21\n"))
+    assert config.jdks == (Path("/opt/jdk-17"), Path.home() / "jdks" / "21")
+
+
+@pytest.mark.parametrize(("text", "error"), [
+    ("jdks: /opt/jdk\n", r"c\.yml\.jdks: expected a list of JDK home directories"),
+    ("jdks:\n  - relative/jdk\n", r"c\.yml\.jdks\[0\]: expected an absolute path"),
+    ("jdks:\n  - ''\n", r"c\.yml\.jdks\[0\]: expected a path, got ''"),
+    ("jdks:\n  - 17\n", r"c\.yml\.jdks\[0\]: expected a path, got 17"),
+    ("jdks: []\nprojects: {}\n", r"c\.yml: unknown key\(s\): projects"),
+    ("{}\n", r"c\.yml\.jdks: required key missing"),
+    ("jdks: []\njdks: []\n", r"c\.yml: duplicate key 'jdks'"),
+    ("jdks: [\n", r"c\.yml: invalid YAML"),
+])  # fmt: skip
+def test_global_config_errors_name_the_file_and_key(tmp_path, text, error):
+    with pytest.raises(ConfigError, match=error):
+        load_global_config(write(tmp_path / "c.yml", text))
+
+
+def test_unreadable_global_config_is_a_config_error(tmp_path):
+    (tmp_path / "dir.yml").mkdir()
+    with pytest.raises(ConfigError, match=r"dir\.yml: cannot read"):
+        load_global_config(tmp_path / "dir.yml")
+
+
+def test_project_settings_default_to_nothing(tmp_path):
+    assert load_project_settings(tmp_path) == ProjectSettings(tmp_path / ".giml" / "settings.yml")
+    write(tmp_path / ".giml" / "settings.yml", "")
+    assert load_project_settings(tmp_path).jdk is None
+
+
+@pytest.mark.parametrize(("text", "jdk"), [("jdk: 17\n", "17"), ("jdk: '17.0.16'\n", "17.0.16"), ("jdk: '21'\n", "21")])
+def test_project_settings_jdk_version(tmp_path, text, jdk):
+    write(tmp_path / ".giml" / "settings.yml", text)
+    settings = load_project_settings(tmp_path)
+    assert settings == ProjectSettings(tmp_path / ".giml" / "settings.yml", jdk, None)
+
+
+def test_project_settings_java_home(tmp_path):
+    write(tmp_path / ".giml" / "settings.yml", "java_home: ~/jdk\n")
+    settings = load_project_settings(tmp_path)
+    assert (settings.jdk, settings.java_home) == (None, Path.home() / "jdk")
+
+
+@pytest.mark.parametrize(("text", "error"), [
+    ("jdk: 17.0\n", r"settings\.yml\.jdk: expected a version such as 17 .* got 17\.0"),
+    ("jdk: temurin-17\n", r"settings\.yml\.jdk: expected a version"),
+    ("jdk: true\n", r"settings\.yml\.jdk: expected a version"),
+    ("jdk: [17]\n", r"settings\.yml\.jdk: expected a version"),
+    ("java_home: jdk\n", r"settings\.yml\.java_home: expected an absolute path"),
+    ("jdk: 17\njava_home: /opt/jdk\n", r"settings\.yml: set jdk or java_home, not both"),
+    ("jdks: 17\n", r"settings\.yml: unknown key\(s\): jdks"),
+    ("- 17\n", r"settings\.yml: expected a mapping"),
+])  # fmt: skip
+def test_project_settings_errors(tmp_path, text, error):
+    write(tmp_path / ".giml" / "settings.yml", text)
+    with pytest.raises(ConfigError, match=error):
+        load_project_settings(tmp_path)

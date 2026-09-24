@@ -25,9 +25,9 @@ These are enforced by code and tests, not just convention:
 
 ## Current status
 
-- Milestone: **M2 (Git safety) complete, awaiting review** (2026-09-24). Next: M3, Gate assessment (needs spec Q6: which projects, and Q8: metric definitions).
-- M1 accepted 2026-09-24.
-- Self-gate at M2: Tier B PASS (line 99.6%, branch 98.6%, test strength 93.1%, mutation coverage 93.1% of 3608 mutants, excluded share 3.7%, 0 flaky of 5 runs).
+- Milestone: **M3 (Gate assessment) in progress** (2026-09-24). `giml assess`, the survey script and per-project JDK choice are done; the survey ran on redkite and chronograf (both below Tier B). Open: spec Q7 (lock tier numbers) and Q8 (metric definitions), then the M3 checkpoint.
+- M1 accepted 2026-09-24. M2 checkpoint recorded (dff9705); work then continued into M3.
+- Self-gate during M3: Tier B PASS (line 99.4%, branch 97.2%, test strength 90.4%, mutation coverage 89.9%, excluded share 2.6%, 0 flaky of 5 runs).
 - Update this line and the log below at each checkpoint.
 
 ## Build and test commands
@@ -40,6 +40,8 @@ Record here only commands that have actually been run successfully. Verified wit
 - CLI: `.venv/bin/giml --version`
 - Self-gate (Tier B): `.venv/bin/python scripts/selfgate.py --flake-runs 5` (about 25 s; runs coverage, mutmut and 5 test runs; `--skip-mutation` for quick coverage only)
 - Workspace commands (M2): `.venv/bin/giml --state-dir <dir> plan <project> [--rewind-to <commit>]`, `giml status`, `giml clean <project> [--branches]`. Try them on a scratch `git clone` of a real project, never the original.
+- Assess (M3): `.venv/bin/giml --state-dir <dir> [--config <global.yml>] assess <project> [--declared-tier B]`. Runs Maven, JaCoCo and PIT; a real project takes minutes.
+- Survey (M3): `.venv/bin/python scripts/survey.py --state-dir <dir> [--config <global.yml>] <clone> [<clone> ...]` on scratch clones; writes `<dir>/reports/survey-<UTC>.md`.
 - Real sync into a throwaway state dir: `.venv/bin/giml --state-dir <dir> sync --coordinate com.fasterxml.jackson.core:jackson-databind` then `.venv/bin/giml --state-dir <dir> status` (about 6 s; OSV zip about 10 MB)
 
 ## Layout
@@ -51,12 +53,15 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 - Snapshots live in `<state>/snapshots/<source>/<UTC-ts>-<hash12>/` with `manifest.json`. OSV has a derived `index.sqlite`; Central stores only its raw `central.json` (small enough to load whole, so no index).
 - State DB: `<state>/state.db`; migrations 0001 (`snapshot`) and 0002 (`project`, `run` with only the columns used so far). Other spec §11 tables and columns arrive with their milestones.
 - `src/giml/git/` holds the git wrapper, preflight, lock, worktrees and rewind; `src/giml/workspace.py` orchestrates `plan` (M2 stub), `clean` and crashed-run detection. `src/giml/maven/project.py` discovers the reactor (root pom plus modules, including profile modules).
+- `src/giml/gate/` holds tooling setup, report collectors, tiers and `assess`; `src/giml/maven/runner.py` runs Maven; `src/giml/maven/jdk.py` chooses the JDK (spec §3.1). `scripts/survey.py` tabulates assessments across projects.
+- Config files: gate config (package), global `~/.giml/config.yml` (`jdks` only), project `.giml/settings.yml` (`jdk` or `java_home`), all parsed in `src/giml/core/config.py`.
 - Platform requirements and how giml stays out of the developer's checkout: `docs/platform.md`.
 
 ## Decisions log
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-24: JDK choice (spec §3.1): project `.giml/settings.yml` gives `jdk` (major or full version) or `java_home`; versions resolve via global `~/.giml/config.yml` `jdks`, then `~/.m2/toolchains.xml`; no settings means inherited JAVA_HOME. The global config knows nothing about projects. A repo-named `java_home` is accepted if it has `bin/javac` (a deliberate exception to hard rule 5). User choice; found when chronograf (Lombok 1.18.32) failed on JDK 25.
 - 2026-09-24: A module with production code but no tests blocks every tier (PIT skips such modules, so mutation figures would be inflated); the report names them. User choice.
 - 2026-09-24: Coverage is computed from one whole-reactor JaCoCo CLI report (org.jacoco.cli, giml-pinned) because JaCoCo's per-module report goal skips modules without tests. Found on the fixture reactor.
 - 2026-09-24: Touchpoint metrics (spec §6.3 step 6) move to M5, where the dependencies under upgrade are known.
@@ -97,6 +102,7 @@ Project-specific traps discovered while working (tool quirks, platform differenc
 - mutmut runs tests from a copy in `mutants/`; anything tests read outside `src/` and `tests/` must be listed in `[tool.mutmut] also_copy` (currently `config/`, `scripts/`).
 - mutmut mutates string literals (PIT does not), so SQL keyword case creates equivalent mutants; SQL literals carry `# pragma: no mutate` and the self-gate counts those lines as excluded.
 - argparse help wraps to the terminal width; golden help tests pin `COLUMNS=100`.
+- Lombok 1.18.32 does not compile on JDK 25 (`cannot find symbol builder()`); chronograf needs JDK 17. A project failing only on the default JDK is a JDK choice problem, not a giml setup bug: compile a plain clone to tell them apart.
 - Maven's `ComparableVersion` is not a total order on degenerate strings (`"" < A < 0A0 < ""`) and its canonical form is not always idempotent (`0.alpha-ga -> 0.alpha -> alpha`). The port reproduces both; never assume sort stability on junk versions.
 
 ## Open CONFIRM items

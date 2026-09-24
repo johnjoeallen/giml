@@ -9,13 +9,15 @@ from __future__ import annotations
 import datetime
 import json
 import re
+import os
+import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from giml import workspace
-from giml.core.config import GateConfig
+from giml.core.config import GateConfig, load_project_settings
 from giml.core.model import GateResultRecord, ProjectRecord, RunRecord
 from giml.gate.modules import ModuleFacts, declares_failsafe, module_facts
 from giml.gate.reports import Mutations, ReportError, flaky_tests, read_jacoco, read_pit, read_surefire
@@ -24,14 +26,16 @@ from giml.gate.tiers import Metrics, earned_tier, misses
 from giml.git.lock import ProjectLock
 from giml.git.preflight import RepoState, preflight
 from giml.git.worktrees import WorktreeManager, require_identity
+from giml.maven.jdk import JdkCatalog, catalog, resolve_jdk
 from giml.maven.project import discover_reactor
 from giml.maven.runner import MavenResult, run_maven
 
 STOP_ASSESSED = "assessed"
 STOP_TESTS_FAILED = "tests_failed"
 
-MavenRunner = Callable[[Path, list[str], Path, float], MavenResult]
-JavaRunner = Callable[[list[str], float], subprocess.CompletedProcess]
+Env = Mapping[str, str] | None  # None: inherit giml's own environment
+MavenRunner = Callable[[Path, list[str], Path, float, Env], MavenResult]
+JavaRunner = Callable[[list[str], float, Env], subprocess.CompletedProcess]
 
 
 class PrerequisiteError(RuntimeError):
@@ -42,8 +46,10 @@ class UnknownTierError(ValueError):
     """--declared-tier names a tier the gate config does not define (exit 5)."""
 
 
-def run_java(args: list[str], timeout: float) -> subprocess.CompletedProcess:
-    return subprocess.run(["java", *args], capture_output=True, text=True, timeout=timeout, check=False)
+def run_java(args: list[str], timeout: float, env: Env = None) -> subprocess.CompletedProcess:
+    java = shutil.which("java", path=(env or os.environ).get("PATH")) or "java"
+    return subprocess.run([java, *args], capture_output=True, text=True, timeout=timeout, check=False,
+                          env=dict(env) if env is not None else None)  # fmt: skip
 
 
 @dataclass
@@ -59,14 +65,17 @@ class _Session:
     """One assessment: the worktree, its logs and the tools it calls."""
 
     def __init__(self, project_dir: Path, logs: Path, tools_dir: Path, maven: MavenRunner, java: JavaRunner,
-                 timeout: float) -> None:  # fmt: skip
+                 timeout: float, env: Env) -> None:  # fmt: skip
         self.project_dir, self.logs, self.tools_dir = project_dir, logs, tools_dir
-        self.maven, self.java, self.timeout = maven, java, timeout
+        self.maven, self.java, self.timeout, self.env = maven, java, timeout, env
         self.step = 0
 
     def mvn(self, name: str, args: list[str]) -> MavenResult:
         self.step += 1
-        return self.maven(self.project_dir, args, self.logs / f"{self.step:02d}-{name}.log", self.timeout)
+        return self.maven(self.project_dir, args, self.logs / f"{self.step:02d}-{name}.log", self.timeout, self.env)
+
+    def run_java(self, args: list[str]) -> subprocess.CompletedProcess:
+        return self.java(args, self.timeout, self.env)
 
     def jacoco_cli(self) -> Path:
         cli = tooling()["jacoco_cli"]
@@ -91,7 +100,7 @@ def _coverage(session: _Session, facts: list[ModuleFacts], out: Path) -> tuple[M
     for directory in class_dirs:
         args += ["--classfiles", str(directory)]
     args += ["--xml", str(out)]
-    result = session.java(args, session.timeout)
+    result = session.run_java(args)
     if result.returncode != 0:
         return None, {"reason": f"jacoco cli failed: {result.stderr.strip()[-500:]}"}
     aggregate = read_jacoco(out)
@@ -141,6 +150,8 @@ def assess(
     maven_timeout: float = 3600,
     maven: MavenRunner = run_maven,
     java: JavaRunner = run_java,
+    jdks: JdkCatalog | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> Assessment:
     if declared_tier is not None and declared_tier not in config.tiers:
         raise UnknownTierError(f"--declared-tier {declared_tier}: not a tier in the gate config "
@@ -161,7 +172,8 @@ def assess(
         try:
             worktree = manager.create_result(branch)
             result = _measure(repo, reactor, worktree, state_dir, run_id, now, config, declared_tier,
-                              maven_timeout, maven, java)  # fmt: skip
+                              maven_timeout, maven, java, jdks or catalog(),
+                              os.environ if environ is None else environ)  # fmt: skip
             stop = STOP_ASSESSED
         except PrerequisiteError:
             stop = STOP_TESTS_FAILED
@@ -180,13 +192,15 @@ def assess(
 
 def _measure(repo: RepoState, reactor: list[Path], worktree: Path, state_dir: Path, run_id: str,
              now: datetime.datetime, config: GateConfig, declared_tier: str | None, timeout: float,
-             maven: MavenRunner, java: JavaRunner) -> dict:  # fmt: skip
+             maven: MavenRunner, java: JavaRunner, jdks: JdkCatalog, environ: Mapping[str, str]) -> dict:  # fmt: skip
     worktree_reactor = [worktree / pom.relative_to(repo.root) for pom in reactor]
     setup: SetupResult = apply_setup(worktree, worktree_reactor)
     facts = [module_facts(pom) for pom in worktree_reactor]
     project_dir = worktree / repo.subdir if repo.subdir else worktree
+    jdk = resolve_jdk(load_project_settings(project_dir), jdks, environ)
     run_dir = state_dir / "runs" / run_id
-    session = _Session(project_dir, run_dir / "logs", state_dir / "tools", maven, java, timeout)
+    session = _Session(project_dir, run_dir / "logs", state_dir / "tools", maven, java, timeout,
+                       jdk.build_env(environ))  # fmt: skip
 
     first = session.mvn("test", ["test", "-Denforcer.skip=true"])
     if not first.succeeded:
@@ -231,7 +245,8 @@ def _measure(repo: RepoState, reactor: list[Path], worktree: Path, state_dir: Pa
         "declared_tier": declared_tier,
         "passed_tier": passed,
         "config_version": config.version,
-        "tools": {"pit": tooling()["pitest"].version, "jacoco": tooling()["jacoco"].version},
+        "tools": {"pit": tooling()["pitest"].version, "jacoco": tooling()["jacoco"].version,
+                  "jdk": jdk.record()},  # fmt: skip
         "measured": {name: (round(value, 2) if value is not None else None) for name, value in (
             ("unit_line_coverage", metrics.unit_line_coverage),
             ("unit_branch_coverage", metrics.unit_branch_coverage),

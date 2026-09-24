@@ -12,11 +12,12 @@ from pathlib import Path
 import pytest
 
 from giml.cli import Environment, ExitCode, main
-from giml.core.config import default_gate_config_path, load_gate_config
-from giml.gate.assess import PrerequisiteError, UnknownTierError, assess
+from giml.core.config import ConfigError, default_gate_config_path, load_gate_config
+from giml.gate.assess import PrerequisiteError, UnknownTierError, assess, run_java
 from giml.maven.runner import MavenResult
 from giml.store.sqlite_store import SqliteStateStore
 from tests.git.repo_helpers import fingerprint, git, make_repo
+from tests.maven.test_jdk import make_catalog, make_jdk
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 REPORTS = FIXTURES / "reports"
@@ -30,9 +31,11 @@ class FakeMaven:
     def __init__(self, fail_on=(), flaky=False, enforcer_log=None):
         self.fail_on, self.flaky, self.enforcer_log = set(fail_on), flaky, enforcer_log
         self.calls: list[list[str]] = []
+        self.envs: list = []
 
-    def __call__(self, project: Path, args: list[str], log: Path, timeout: float) -> MavenResult:
+    def __call__(self, project: Path, args: list[str], log: Path, timeout: float, env) -> MavenResult:
         self.calls.append(args)
+        self.envs.append(env)
         log.parent.mkdir(parents=True, exist_ok=True)
         step = "pit" if any("pitest" in a for a in args) else "copy" if any(":copy" in a for a in args) else args[0]
         ok = step not in self.fail_on
@@ -68,10 +71,14 @@ class FakeMaven:
         return MavenResult(tuple(args), 0 if ok else 1, 0.1, log, False)
 
 
-def fake_java(args, timeout):
+def fake_java(args, timeout, env):
+    fake_java.envs.append(env)
     out = Path(args[args.index("--xml") + 1])
     shutil.copy(REPORTS / "jacoco-aggregate.xml", out)
     return subprocess.CompletedProcess(args, 0, "", "")
+
+
+fake_java.envs = []
 
 
 @pytest.fixture
@@ -84,9 +91,10 @@ def repo(tmp_path):
     return repo
 
 
-def run(repo, tmp_path, maven=None, declared="B", java=fake_java):
+def run(repo, tmp_path, maven=None, declared="B", java=fake_java, jdks=None, environ=None):
     with SqliteStateStore(tmp_path / "state" / "state.db") as store:
-        outcome = assess(repo, tmp_path / "state", store, lambda: T0, CONFIG, declared, 60, maven or FakeMaven(), java)
+        outcome = assess(repo, tmp_path / "state", store, lambda: T0, CONFIG, declared, 60, maven or FakeMaven(), java,
+                         jdks or make_catalog(tmp_path), environ or {})  # fmt: skip
         return outcome, store.list_runs(), store.latest_gate_result(store.list_projects()[0].id)
 
 
@@ -107,6 +115,8 @@ def test_full_assessment_of_the_mini_reactor(repo, tmp_path):
     assert result["integration_tests"] == {"count": 0, "failsafe_declared": False}
     assert len(result["tooling_added"]) == 3 and result["setup_commit"]
     assert result["config_version"] == 3 and result["declared_tier"] == "B"
+    assert result["tools"]["jdk"] == {"version": None, "home": None, "source": "inherited"}
+    assert set(maven.envs) == {None}
     assert result["expires"] == "2026-10-24T12:00:00+00:00"
 
     assert outcome.branch == f"giml/assess/{git(repo, 'rev-parse', 'HEAD')[:7]}/20260924T120000Z"
@@ -150,7 +160,7 @@ def test_enforcer_baseline_failure_is_recorded_not_fatal(repo, tmp_path):
 
 
 def test_jacoco_cli_failure_makes_coverage_unavailable(repo, tmp_path):
-    failing = lambda args, timeout: subprocess.CompletedProcess(args, 1, "", "boom")  # noqa: E731
+    failing = lambda args, timeout, env: subprocess.CompletedProcess(args, 1, "", "boom")  # noqa: E731
     outcome, _, _ = run(repo, tmp_path, java=failing)
     assert outcome.result["measured"]["unit_line_coverage"] is None
     assert outcome.result["unavailable"]["unit_line_coverage"] == "jacoco cli failed: boom"
@@ -190,3 +200,62 @@ def test_cli_assess_failure_exit_codes(repo, tmp_path, capsys):
     bad = tmp_path / "bad.yaml"
     bad.write_text("version: 3\n")
     assert main(["--state-dir", str(tmp_path / "s3"), "assess", str(repo), "--gate-config", str(bad)], env) == ExitCode.CONFIGURATION
+
+
+def commit_settings(repo, text):
+    (repo / ".giml").mkdir()
+    (repo / ".giml" / "settings.yml").write_text(text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "giml settings")
+
+
+def test_project_settings_choose_the_jdk_for_maven_and_java(repo, tmp_path):
+    home = make_jdk(tmp_path / "jdks" / "17", "17.0.16")
+    make_jdk(tmp_path / "jdks" / "21", "21.0.9")
+    commit_settings(repo, "jdk: 17\n")
+    maven, fake_java.envs[:] = FakeMaven(), []
+    outcome, _, _ = run(repo, tmp_path, maven, jdks=make_catalog(tmp_path, [tmp_path / "jdks" / "21", home]),
+                        environ={"PATH": "/usr/bin", "JAVA_HOME": "/elsewhere"})  # fmt: skip
+    assert outcome.result["tools"]["jdk"] == {"version": "17.0.16", "home": str(home), "source": "global config"}
+    expected = {"PATH": f"{home / 'bin'}:/usr/bin", "JAVA_HOME": str(home)}
+    assert maven.envs and all(env == expected for env in maven.envs)
+    assert fake_java.envs == [expected]
+
+
+def test_settings_are_read_from_the_base_commit_not_the_checkout(repo, tmp_path):
+    commit_settings(repo, "java_home: /nowhere/jdk\n")
+    # Delete it from the checkout, hidden from preflight's dirty check: giml must still see the committed file.
+    git(repo, "update-index", "--assume-unchanged", ".giml/settings.yml")
+    (repo / ".giml" / "settings.yml").unlink()
+    with pytest.raises(ConfigError, match=r"java_home /nowhere/jdk is not a JDK"):
+        run(repo, tmp_path)
+
+
+def test_unknown_jdk_version_is_a_configuration_error(repo, tmp_path, capsys):
+    commit_settings(repo, "jdk: 11\n")
+    code = main(["--state-dir", str(tmp_path / "s"), "--config", str(tmp_path / "none.yml"), "assess", str(repo)],
+                env_with(FakeMaven()))  # fmt: skip
+    assert code == ExitCode.CONFIGURATION
+    assert "jdk 11: no JDK 11 in" in capsys.readouterr().err
+    with SqliteStateStore(tmp_path / "s" / "state.db") as store:
+        assert [r.stop_reason for r in store.list_runs()] == ["setup_failed"]
+
+
+def test_cli_config_flag_supplies_the_jdk_list(repo, tmp_path, capsys):
+    home = make_jdk(tmp_path / "jdk", "21.0.9")
+    config = tmp_path / "global.yml"
+    config.write_text(f"jdks:\n  - {home}\n")
+    commit_settings(repo, "jdk: '21'\n")
+    code = main(["--state-dir", str(tmp_path / "s"), "--config", str(config), "assess", str(repo)], env_with(FakeMaven()))
+    assert code == ExitCode.SUCCESS
+    assert json.loads(capsys.readouterr().out)["tools"]["jdk"]["home"] == str(home)
+
+
+def test_run_java_uses_the_java_on_the_given_path(tmp_path):
+    bin_dir = tmp_path / "jdk" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "java").write_text('#!/bin/sh\necho "java $JAVA_HOME $*"\n')
+    (bin_dir / "java").chmod(0o755)
+    result = run_java(["-version"], 10, {"PATH": str(bin_dir), "JAVA_HOME": "/j"})
+    assert (result.returncode, result.stdout) == (0, "java /j -version\n")
+    assert result.args[0] == str(bin_dir / "java")

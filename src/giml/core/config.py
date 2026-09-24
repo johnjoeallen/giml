@@ -1,4 +1,5 @@
-"""Loader and validator for ``gate-config.yaml`` (spec section 6.1).
+"""Loaders and validators for ``gate-config.yaml`` (spec section 6.1), the developer's global
+``~/.giml/config.yml`` and a project's ``.giml/settings.yml``.
 
 Strict by design: unknown or duplicate keys are errors, so a typo cannot silently weaken a gate.
 """
@@ -6,6 +7,7 @@ Strict by design: unknown or duplicate keys are errors, so a typo cannot silentl
 from __future__ import annotations
 
 import datetime
+import re
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -140,6 +142,9 @@ class _Section:
     def mapping(self, key: str) -> Any:
         return self._get(key)
 
+    def optional(self, key: str) -> Any:
+        return self._get(key, required=False)
+
     def finish(self) -> None:
         unknown = sorted(str(k) for k in self.data if k not in self.used)
         if unknown:
@@ -231,3 +236,90 @@ def load_gate_config(path: Path) -> GateConfig:
         return parse_gate_config(text)
     except ConfigError as exc:
         raise ConfigError(f"{path}: {exc}") from exc
+
+
+def _load_yaml(path: Path) -> Any:
+    """The parsed YAML of an optional file, or None when the file does not exist."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ConfigError(f"{path}: cannot read: {exc.strerror}") from exc
+    try:
+        return yaml.load(text, Loader=_StrictLoader)  # _StrictLoader extends SafeLoader
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"{path}: invalid YAML: {exc}") from exc
+    except ConfigError as exc:
+        raise ConfigError(f"{path}: {exc}") from exc
+
+
+def _absolute_path(value: Any, where: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{where}: expected a path, got {value!r}")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ConfigError(f"{where}: expected an absolute path (or one starting with ~), got {value!r}")
+    return path
+
+
+JDK_VERSION = re.compile(r"\d+(\.\d+)*")
+
+
+@dataclass(frozen=True)
+class GlobalConfig:
+    """The developer's own giml settings (``~/.giml/config.yml``); knows nothing about projects."""
+
+    jdks: tuple[Path, ...] = ()
+
+
+def default_global_config_path() -> Path:
+    return Path.home() / ".giml" / "config.yml"
+
+
+def load_global_config(path: Path) -> GlobalConfig:
+    """Load the global config; a missing file means no settings. Raises ConfigError naming the file."""
+    data = _load_yaml(path)
+    if data is None:
+        return GlobalConfig()
+    root = _Section(data, f"{path}")
+    jdks = root.mapping("jdks")
+    if not isinstance(jdks, list):
+        raise ConfigError(f"{path}.jdks: expected a list of JDK home directories, got {jdks!r}")
+    root.finish()
+    return GlobalConfig(tuple(_absolute_path(entry, f"{path}.jdks[{i}]") for i, entry in enumerate(jdks)))
+
+
+@dataclass(frozen=True)
+class ProjectSettings:
+    """A project's ``.giml/settings.yml``, read from giml's worktree (the base commit)."""
+
+    path: Path
+    jdk: str | None = None  # a major ("17") or full ("17.0.16") version
+    java_home: Path | None = None
+
+
+def project_settings_path(project_dir: Path) -> Path:
+    return project_dir / ".giml" / "settings.yml"
+
+
+def load_project_settings(project_dir: Path) -> ProjectSettings:
+    """Load a project's settings; a missing or empty file means none. Raises ConfigError."""
+    path = project_settings_path(project_dir)
+    data = _load_yaml(path)
+    if data is None:
+        return ProjectSettings(path)
+    root = _Section(data, f"{path}")
+    jdk = root.optional("jdk")
+    java_home = root.optional("java_home")
+    root.finish()
+    if jdk is not None and java_home is not None:
+        raise ConfigError(f"{path}: set jdk or java_home, not both")
+    if jdk is not None:
+        if isinstance(jdk, bool) or not isinstance(jdk, (int, str)) or not JDK_VERSION.fullmatch(str(jdk)):
+            raise ConfigError(f"{path}.jdk: expected a version such as 17 or \"17.0.16\" (quote dotted "
+                              f"versions), got {jdk!r}")  # fmt: skip
+        jdk = str(jdk)
+    if java_home is not None:
+        java_home = _absolute_path(java_home, f"{path}.java_home")
+    return ProjectSettings(path, jdk, java_home)

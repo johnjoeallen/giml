@@ -14,10 +14,11 @@ from pathlib import Path
 
 from giml.core.config import default_gate_config_path, load_gate_config
 from giml.gate.assess import assess
+from giml.maven.jdk import catalog
 from giml.store.sqlite_store import SqliteStateStore
 
-COLUMNS = ("project", "line %", "branch %", "strength %", "mutation %", "excluded %", "flaky", "untested modules",
-           "enforcer", "tooling added", "earned tier")  # fmt: skip
+COLUMNS = ("project", "jdk", "line %", "branch %", "strength %", "mutation %", "excluded %", "flaky",
+           "untested modules", "enforcer", "tooling added", "earned tier")  # fmt: skip
 
 
 def _cell(value: object) -> str:
@@ -28,13 +29,17 @@ def _cell(value: object) -> str:
     return str(value)
 
 
+def _jdk(jdk: dict) -> str:
+    return f"{jdk['version'] or 'unknown'} ({jdk['source']})"
+
+
 def row(result: dict) -> list[str]:
     measured = result["measured"]
     enforcer = result["enforcer"]["status"]
     if result["enforcer"].get("failed_rules"):
         enforcer += " (" + ", ".join(result["enforcer"]["failed_rules"]) + ")"
     return [_cell(v) for v in (
-        result["project"], measured["unit_line_coverage"], measured["unit_branch_coverage"],
+        result["project"], _jdk(result["tools"]["jdk"]), measured["unit_line_coverage"], measured["unit_branch_coverage"],
         measured["pit_test_strength"], measured["pit_mutation_coverage"], result["excluded_share"],
         len(result["flaky_tests"]), ", ".join(result["untested_modules"]) or "none", enforcer,
         len(result["tooling_added"]), result["passed_tier"] or "none",
@@ -50,16 +55,18 @@ def table(results: list[dict]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--state-dir", type=Path, default=Path.home() / ".giml")
+    parser.add_argument("--config", type=Path, help="global config (default: ~/.giml/config.yml)")
     parser.add_argument("projects", nargs="+", type=Path)
     args = parser.parse_args(argv)
     config = load_gate_config(default_gate_config_path())
+    jdks = catalog(args.config)
     now = datetime.datetime.now(datetime.UTC)
     results, failures = [], []
     with SqliteStateStore(args.state_dir / "state.db") as store:
         for project in args.projects:
             try:
                 results.append(assess(project, args.state_dir, store, lambda: datetime.datetime.now(datetime.UTC),
-                                      config).result)  # fmt: skip
+                                      config, jdks=jdks).result)  # fmt: skip
             except Exception as exc:  # report every project, even if one fails
                 failures.append(f"- {project}: {type(exc).__name__}: {exc}")
     report = [f"# giml survey {now:%Y-%m-%d %H:%M} UTC (gate config version {config.version})", "", table(results)]
