@@ -41,7 +41,7 @@ def new_run_id(now: datetime.datetime) -> str:
     return f"{now.astimezone(datetime.UTC).strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
 
 
-def _remote_url_hash(repo_root: Path) -> str | None:
+def remote_url_hash(repo_root: Path) -> str | None:
     result = Git(repo_root).run("remote", "get-url", "origin", check=False)
     url = result.stdout.strip()
     return hashlib.sha256(url.encode()).hexdigest() if result.returncode == 0 and url else None
@@ -51,7 +51,7 @@ def _worktree_root(state_dir: Path, key: str) -> Path:
     return state_dir / "worktrees" / key
 
 
-def _mark_crashed(store: SqliteStateStore, key: str, now: datetime.datetime) -> list[RunRecord]:
+def mark_crashed(store: SqliteStateStore, key: str, now: datetime.datetime) -> list[RunRecord]:
     """Unfinished runs of a project whose lock we hold can only be crashed runs."""
     crashed = store.list_runs(key, unfinished_only=True)
     for run in crashed:
@@ -75,11 +75,11 @@ def set_up(
 
     with ProjectLock(state_dir, repo.project_key):
         now = clock()
-        crashed = _mark_crashed(store, repo.project_key, now)
+        crashed = mark_crashed(store, repo.project_key, now)
         run_id = new_run_id(now)
         branch = result_branch(repo.base_sha, now, rewind is not None)
         manager = WorktreeManager(repo, state_dir, run_id)
-        store.save_project(ProjectRecord(repo.project_key, repo.project_dir, _remote_url_hash(repo.root), now))
+        store.save_project(ProjectRecord(repo.project_key, repo.project_dir, remote_url_hash(repo.root), now))
         # Recorded before the worktree exists, so a crash during setup is still detectable.
         store.start_run(RunRecord(run_id, repo.project_key, repo.base_sha, branch, manager.root / run_id, now,
                                   rewind_from_sha=rewind.sha if rewind else None))  # fmt: skip
@@ -149,7 +149,7 @@ def clean(
 def _clean_project(state_dir, store, clock, project: ProjectRecord, branches: bool) -> list[str]:
     if not project.path.is_dir():
         return [f"{project.id}: skipped, {project.path} no longer exists"]
-    _mark_crashed(store, project.id, clock())
+    mark_crashed(store, project.id, clock())
     root = _worktree_root(state_dir, project.id)
     git = Git(project.path)
     actions = []

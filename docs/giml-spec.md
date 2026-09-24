@@ -207,7 +207,7 @@ A tier never changes *what* a good upgrade is. The CVE criteria (`cve_minimal` c
 
 ### 6.1 Central configuration (versioned)
 
-`config/gate-config.yaml`:
+`src/giml/gate/gate-config.yaml` (shipped with giml; `--gate-config` overrides it):
 
 ```yaml
 version: 3
@@ -262,12 +262,12 @@ The project declares its target tier (in `.redkite/settings.yml`, section 12, ke
 
 Run on the base commit in a worktree:
 
-1. **Unit line and branch coverage** from JaCoCo (run the project's unit tests with its own JaCoCo configuration; parse `jacoco.xml`).
-2. **PIT**: run pitest, parse XML. Compute *both* test strength and mutation coverage from mutant statuses (`KILLED`, `SURVIVED`, `NO_COVERAGE`, `TIMED_OUT`, others per PIT docs). Record the PIT and JaCoCo versions.
+1. **Unit line and branch coverage** from JaCoCo. The coverage figures come from one whole-reactor report built with JaCoCo's command-line tool over every module's compiled classes, so modules without tests count as uncovered (JaCoCo's per-module `report` goal silently skips them). Per-module `jacoco.xml` reports are used only to find classes the project's configuration excludes.
+2. **PIT**: run pitest, parse XML. PIT skips modules that have production code but no tests, so their mutants would silently vanish: while any such module exists, the project cannot earn a tier and the report names the modules (confirmed 2026-09-24). Compute *both* test strength and mutation coverage from mutant statuses (`KILLED`, `SURVIVED`, `NO_COVERAGE`, `TIMED_OUT`, others per PIT docs). Record the PIT and JaCoCo versions.
 3. **Integration tests present**: detect failsafe/`*IT` tests or a declared integration-test profile; record boolean plus the count.
 4. **Flake check**: run the full unit suite `flake_check_runs` times; any inconsistent result marks flaky tests and fails the flake criterion.
 5. **Excluded share**: compute share of code excluded from coverage/PIT via configuration; fail the tier if above the tier maximum; record the exclusions themselves.
-6. **Touchpoints**: for the dependencies under upgrade, find usage sites (classes that import from the dependency's packages) and evaluate the four metrics on that scope only. Tier requirements apply to this scope as well as to the whole project. Evaluated per plan, cached per (commit, dependency).
+6. **Touchpoints** (evaluated from M5, when the planner knows the dependencies under upgrade): for the dependencies under upgrade, find usage sites (classes that import from the dependency's packages) and evaluate the four metrics on that scope only. Tier requirements apply to this scope as well as to the whole project. Evaluated per plan, cached per (commit, dependency).
 7. **Startup check availability**: whether the smoke configuration exists and the baseline starts (section 12).
 
 PIT is slow: support scoping runs to touchpoint classes and PIT's incremental history. Full-project assessment is scheduled/cached; per-plan verification uses scoped runs.

@@ -46,7 +46,7 @@ Record here only commands that have actually been run successfully. Verified wit
 
 Python package under `src/giml/` with tests under `tests/`; see spec section 3 for the layout. Record deviations from the spec layout here.
 
-- `config/gate-config.yaml` is the default gate config (spec §6.1); loaded by `giml.core.config`.
+- Deviation: the default gate config lives in the package, `src/giml/gate/gate-config.yaml` (not `config/`), so an installed giml can find it; `giml.core.config.default_gate_config_path()`. GiML-pinned tool versions are in `src/giml/gate/tooling.yaml`.
 - `scripts/selfgate.py` is giml's own quality gate (not part of the package).
 - Snapshots live in `<state>/snapshots/<source>/<UTC-ts>-<hash12>/` with `manifest.json`. OSV has a derived `index.sqlite`; Central stores only its raw `central.json` (small enough to load whole, so no index).
 - State DB: `<state>/state.db`; migrations 0001 (`snapshot`) and 0002 (`project`, `run` with only the columns used so far). Other spec §11 tables and columns arrive with their milestones.
@@ -57,6 +57,9 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-24: A module with production code but no tests blocks every tier (PIT skips such modules, so mutation figures would be inflated); the report names them. User choice.
+- 2026-09-24: Coverage is computed from one whole-reactor JaCoCo CLI report (org.jacoco.cli, giml-pinned) because JaCoCo's per-module report goal skips modules without tests. Found on the fixture reactor.
+- 2026-09-24: Touchpoint metrics (spec §6.3 step 6) move to M5, where the dependencies under upgrade are known.
 - 2026-09-24: giml adds missing quality tooling (JaCoCo, PIT, enforcer bans) in its worktree as a separate `[giml-setup]` commit with giml-pinned versions; a low score still leaves the branch so the developer can take the setup back and raise scores. Only a Maven build with unit tests is a hard prerequisite (spec §3). User instruction.
 - 2026-09-24: Multi-module reactors are in phase 1 (so ../redkite can be used); rewind restores every reactor pom.xml; M5 edits versions in the declaring module. User choice.
 - 2026-09-24: Git LFS allowed; giml disables the LFS filter on every git call so worktrees hold pointer files and nothing is downloaded. Submodules still refused. User choice.

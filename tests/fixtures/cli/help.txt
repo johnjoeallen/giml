@@ -6,6 +6,7 @@ positional arguments:
   COMMAND
     sync                fetch/refresh data snapshots (network)
     status              show snapshot ages, the state directory and crashed runs
+    assess              measure test quality and earn a tier (runs Maven)
     plan                plan upgrades for a project (M2: sets up the workspace only)
     clean               remove giml worktrees (and optionally result branches)
 

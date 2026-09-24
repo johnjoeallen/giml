@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import datetime
 import enum
+import json
 import os
 import sqlite3
+import subprocess
 import sys
 import zipfile
 from collections.abc import Callable, Sequence
@@ -20,6 +22,11 @@ from giml.data.central import MetadataError
 from giml.data.http import Fetcher, FetchError, UrlLibFetcher
 from giml.data.snapshots import read_manifest
 from giml import workspace
+from giml.core.config import ConfigError, default_gate_config_path, load_gate_config
+from giml.gate.assess import JavaRunner, MavenRunner, PrerequisiteError, UnknownTierError, run_java
+from giml.gate.assess import assess as assess_project
+from giml.gate.reports import ReportError
+from giml.maven.runner import MavenNotFound, run_maven
 from giml.git.lock import LockHeld
 from giml.git.preflight import PreflightRefusal
 from giml.git.rewind import RewindError
@@ -56,6 +63,8 @@ class Environment:
     osv_url: str = osv.OSV_MAVEN_URL
     central_url: str = central.CENTRAL_URL
     environ: dict[str, str] = field(default_factory=lambda: dict(os.environ))
+    maven: MavenRunner = run_maven
+    java: JavaRunner = run_java
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
                       help="additional groupId:artifactId to sync (repeatable)")  # fmt: skip
 
     commands.add_parser("status", help="show snapshot ages, the state directory and crashed runs")
+
+    assess = commands.add_parser("assess", help="measure test quality and earn a tier (runs Maven)")
+    assess.add_argument("path", type=Path, help="project directory containing pom.xml")
+    assess.add_argument("--declared-tier", metavar="TIER", help="tier the project aims for; misses are reported")
+    assess.add_argument("--gate-config", type=Path, metavar="FILE", help="gate config (default: giml's own)")
 
     plan = commands.add_parser("plan", help="plan upgrades for a project (M2: sets up the workspace only)")
     plan.add_argument("path", type=Path, help="project directory containing pom.xml")
@@ -186,6 +200,25 @@ def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore
     return ExitCode.SUCCESS
 
 
+def cmd_assess(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
+    config = load_gate_config(args.gate_config or default_gate_config_path())
+    for warning in config.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    outcome = assess_project(args.path, root, store, env.clock, config, args.declared_tier,
+                             maven=env.maven, java=env.java)  # fmt: skip
+    result = outcome.result
+    print(json.dumps(result, indent=2, sort_keys=True))
+    print(f"branch: {outcome.branch}", file=sys.stderr)
+    print(f"worktree: {outcome.worktree}", file=sys.stderr)
+    print(f"report: {outcome.report_path}", file=sys.stderr)
+    tier = result["passed_tier"] or "none (propose nothing)"
+    print(f"earned tier: {tier}", file=sys.stderr)
+    if result["setup_commit"]:
+        print(f"giml added quality tooling in commit {result['setup_commit'][:7]}; cherry-pick it to keep it",
+              file=sys.stderr)  # fmt: skip
+    return ExitCode.SUCCESS
+
+
 def cmd_clean(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
     if args.all and args.path:
         raise UsageError("pass a project path or --all, not both")
@@ -206,6 +239,8 @@ def main(argv: Sequence[str] | None = None, env: Environment | None = None) -> i
         with SqliteStateStore(root / "state.db") as store:
             if args.command == "sync":
                 return cmd_sync(args, env, store, root)
+            if args.command == "assess":
+                return cmd_assess(args, env, store, root)
             if args.command == "plan":
                 return cmd_plan(args, env, store, root)
             if args.command == "clean":
@@ -217,10 +252,11 @@ def main(argv: Sequence[str] | None = None, env: Environment | None = None) -> i
     except UnsupportedProjectError as exc:
         print(f"giml: unsupported: {exc}", file=sys.stderr)
         return ExitCode.INELIGIBLE
-    except (UsageError, PomError, StoreError, RewindError, IdentityError) as exc:
+    except (UsageError, PomError, StoreError, RewindError, IdentityError, ConfigError, PrerequisiteError,
+            UnknownTierError) as exc:  # fmt: skip
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.CONFIGURATION
-    except (FetchError, MetadataError, GitError, BranchExistsError, ForeignWorktreeError,
-            zipfile.BadZipFile, sqlite3.Error, OSError) as exc:  # fmt: skip
+    except (FetchError, MetadataError, GitError, BranchExistsError, ForeignWorktreeError, MavenNotFound,
+            ReportError, subprocess.TimeoutExpired, zipfile.BadZipFile, sqlite3.Error, OSError) as exc:  # fmt: skip
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.INFRASTRUCTURE

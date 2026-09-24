@@ -1,13 +1,11 @@
 import datetime
-from pathlib import Path
 
 import pytest
 import yaml
 
-from giml.core.config import ConfigError, load_gate_config, parse_gate_config
+from giml.core.config import ConfigError, default_gate_config_path, load_gate_config, parse_gate_config
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG = REPO_ROOT / "config" / "gate-config.yaml"
+DEFAULT_CONFIG = default_gate_config_path()
 
 
 def default_data() -> dict:

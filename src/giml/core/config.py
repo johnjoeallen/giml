@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -213,6 +214,11 @@ def parse_gate_config(text: str) -> GateConfig:
         if t.pit_test_strength <= t.pit_mutation_coverage
     )
     return GateConfig(version, tiers, autonomy, verification, shared, planning, warnings)
+
+
+def default_gate_config_path() -> Path:
+    """The gate config shipped with giml (spec 6.1)."""
+    return Path(str(resources.files("giml.gate") / "gate-config.yaml"))
 
 
 def load_gate_config(path: Path) -> GateConfig:

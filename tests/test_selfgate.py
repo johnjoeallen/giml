@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from giml.core.config import load_gate_config
+from giml.core.config import default_gate_config_path, load_gate_config
 
 ROOT = Path(__file__).resolve().parent.parent
 _spec = importlib.util.spec_from_file_location("selfgate", ROOT / "scripts" / "selfgate.py")
@@ -14,7 +14,7 @@ selfgate = importlib.util.module_from_spec(_spec)
 sys.modules["selfgate"] = selfgate  # dataclasses resolves the defining module through sys.modules
 _spec.loader.exec_module(selfgate)
 
-TIER_B = load_gate_config(ROOT / "config" / "gate-config.yaml").tiers["B"]
+TIER_B = load_gate_config(default_gate_config_path()).tiers["B"]
 
 
 def stats(**counts):

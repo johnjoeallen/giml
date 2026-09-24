@@ -178,7 +178,7 @@ def test_corrupt_download_exits_4(served, tmp_path, capsys):
 @pytest.mark.parametrize(
     ("args", "golden"),
     [(["--help"], "help.txt"), (["sync", "--help"], "sync-help.txt"), (["plan", "--help"], "plan-help.txt"),
-     (["clean", "--help"], "clean-help.txt")],
+     (["clean", "--help"], "clean-help.txt"), (["assess", "--help"], "assess-help.txt")],
 )  # fmt: skip
 def test_help_output_matches_golden_file(monkeypatch, capsys, args, golden):
     # argparse wraps to the terminal width; pin it so the golden file is stable.

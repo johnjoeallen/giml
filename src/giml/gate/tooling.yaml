@@ -20,3 +20,12 @@ extra_enforcer_rules:
   groupId: org.codehaus.mojo
   artifactId: extra-enforcer-rules
   version: 1.12.1
+jacoco_cli:                       # builds the whole-reactor coverage report, untested modules included
+  groupId: org.jacoco
+  artifactId: org.jacoco.cli
+  version: 0.8.15
+  classifier: nodeps
+dependency_plugin:                # fetches giml's own tools into <state>/tools
+  groupId: org.apache.maven.plugins
+  artifactId: maven-dependency-plugin
+  version: 3.11.0

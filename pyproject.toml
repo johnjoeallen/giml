@@ -27,7 +27,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "giml.store" = ["migrations/*.sql"]
-"giml.gate" = ["tooling.yaml"]
+"giml.gate" = ["tooling.yaml", "gate-config.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -45,6 +45,6 @@ show_missing = true
 
 [tool.mutmut]
 source_paths = ["src/giml/"]
-also_copy = ["config/", "scripts/"]
+also_copy = ["scripts/"]
 # Protocol declarations only: mutating their default values changes no behaviour.
 do_not_mutate = ["*giml/core/interfaces.py"]

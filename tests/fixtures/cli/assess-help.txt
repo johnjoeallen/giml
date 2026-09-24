@@ -1,0 +1,9 @@
+usage: giml assess [-h] [--declared-tier TIER] [--gate-config FILE] path
+
+positional arguments:
+  path                  project directory containing pom.xml
+
+options:
+  -h, --help            show this help message and exit
+  --declared-tier TIER  tier the project aims for; misses are reported
+  --gate-config FILE    gate config (default: giml's own)

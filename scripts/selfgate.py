@@ -1,4 +1,4 @@
-"""giml's own quality gate: checks giml itself against a tier from config/gate-config.yaml.
+"""giml's own quality gate: checks giml itself against a tier from giml's gate config.
 
 Dogfooding requirement (spec section 0): giml meets Tier B from M1 and Tier A by the end of M6.
 coverage.py and mutmut stand in for JaCoCo and PIT. The mutmut counts map to PIT's measures as:
@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from giml.core.config import Tier, load_gate_config  # noqa: E402 - needs the sys.path entry above
+from giml.core.config import Tier, default_gate_config_path, load_gate_config  # noqa: E402 - needs the sys.path entry above
 
 
 @dataclass(frozen=True)
@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-children", type=int, default=os.cpu_count() or 4)
     args = parser.parse_args(argv)
 
-    config = load_gate_config(ROOT / "config" / "gate-config.yaml")
+    config = load_gate_config(default_gate_config_path())
     if args.tier not in config.tiers:
         parser.error(f"unknown tier {args.tier!r}; config has {', '.join(config.tiers)}")
     tier = config.tiers[args.tier]

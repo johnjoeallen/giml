@@ -28,16 +28,24 @@ class Plugin:
     group_id: str
     artifact_id: str
     version: str
+    classifier: str | None = None
 
     @property
     def key(self) -> str:
         return f"{self.group_id}:{self.artifact_id}"
 
+    @property
+    def gav(self) -> str:
+        """Maven artifact coordinates, as dependency:copy expects them."""
+        suffix = f":jar:{self.classifier}" if self.classifier else ""
+        return f"{self.group_id}:{self.artifact_id}:{self.version}{suffix}"
+
 
 @cache
 def tooling() -> dict[str, Plugin]:
     data = yaml.safe_load((resources.files("giml.gate") / "tooling.yaml").read_text("utf-8"))
-    return {name: Plugin(v["groupId"], v["artifactId"], str(v["version"])) for name, v in data.items()}
+    return {name: Plugin(v["groupId"], v["artifactId"], str(v["version"]), v.get("classifier"))
+            for name, v in data.items()}  # fmt: skip
 
 
 @dataclass
