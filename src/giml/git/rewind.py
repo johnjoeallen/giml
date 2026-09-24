@@ -41,6 +41,8 @@ def resolve_rewind(repo: RepoState, commit: str) -> RewindTarget:
     path = pom_path(repo)
     if git.run("cat-file", "-e", f"{sha}:{path}", check=False).returncode != 0:
         raise RewindError(f"--rewind-to {commit}: {sha[:7]} has no {path}")
+    if git.out("rev-parse", f"{sha}:{path}") == git.out("rev-parse", f"{repo.base_sha}:{path}"):
+        raise RewindError(f"--rewind-to {commit}: {path} at {sha[:7]} is identical to the base commit's")
     return RewindTarget(sha, git.out("log", "-1", "--format=%cI", sha), path)
 
 
@@ -49,8 +51,6 @@ def apply_rewind(worktree: Path, target: RewindTarget, identity: dict[str, str])
     git = Git(worktree)
     # restore (not a Python read/write) keeps the file byte-for-byte, line endings included.
     git.run("restore", "--source", target.sha, "--worktree", "--", target.pom_path)
-    if not git.out("status", "--porcelain", "--", target.pom_path):
-        raise RewindError(f"--rewind-to {target.sha[:7]}: {target.pom_path} is identical to the base commit's")
     message = (
         f"[giml-rewind] pom.xml from {target.sha[:7]} (synthetic)\n\n"
         f"Rewound {target.pom_path} to its content at {target.sha} (committed {target.committed_at}).\n"

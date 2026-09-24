@@ -19,7 +19,14 @@ from giml.data import central, osv
 from giml.data.central import MetadataError
 from giml.data.http import Fetcher, FetchError, UrlLibFetcher
 from giml.data.snapshots import read_manifest
+from giml import workspace
+from giml.git.lock import LockHeld
+from giml.git.preflight import PreflightRefusal
+from giml.git.rewind import RewindError
+from giml.git.runner import GitError
+from giml.git.worktrees import BranchExistsError, ForeignWorktreeError, IdentityError
 from giml.maven.pom_coordinates import PomError, read_pom_coordinates
+from giml.maven.project import UnsupportedProjectError
 from giml.store.sqlite_store import SqliteStateStore, StoreError
 
 
@@ -64,7 +71,17 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--coordinate", action="append", default=[], metavar="G:A",
                       help="additional groupId:artifactId to sync (repeatable)")  # fmt: skip
 
-    commands.add_parser("status", help="show snapshot ages and the state directory")
+    commands.add_parser("status", help="show snapshot ages, the state directory and crashed runs")
+
+    plan = commands.add_parser("plan", help="plan upgrades for a project (M2: sets up the workspace only)")
+    plan.add_argument("path", type=Path, help="project directory containing pom.xml")
+    plan.add_argument("--allow-detached", action="store_true", help="allow a detached HEAD as the base")
+    plan.add_argument("--rewind-to", metavar="COMMIT", help="start from pom.xml as it was at COMMIT (synthetic)")
+
+    clean = commands.add_parser("clean", help="remove giml worktrees (and optionally result branches)")
+    clean.add_argument("path", nargs="?", type=Path, help="project directory (default: current directory)")
+    clean.add_argument("--all", action="store_true", help="clean every project giml knows")
+    clean.add_argument("--branches", action="store_true", help="also delete giml result branches")
     return parser
 
 
@@ -142,6 +159,35 @@ def cmd_status(env: Environment, store: SqliteStateStore, root: Path) -> int:
             print(f"{source}: no snapshot (run `giml sync --{source}`)")
         else:
             print(f"{source}: {_describe(info, now)}")
+    stale = workspace.stale_runs(root, store)
+    print(f"crashed runs: {len(stale)}" + (" (remove with `giml clean <project>`)" if stale else ""))
+    for entry in stale:
+        started = entry.run.started_at.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(f"  {entry.run.id}  {entry.project_path}  started {started}  worktree {entry.run.worktree_path}")
+    return ExitCode.SUCCESS
+
+
+def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
+    ws = workspace.set_up(args.path, root, store, env.clock, args.allow_detached, args.rewind_to)
+    for run in ws.crashed_runs:
+        print(f"warning: earlier run {run.id} never finished (crashed); its worktree {run.worktree_path} "
+              "is left for inspection, remove it with `giml clean`", file=sys.stderr)  # fmt: skip
+    print(f"run: {ws.run_id}")
+    print(f"branch: {ws.branch}")
+    print(f"worktree: {ws.worktree}")
+    if ws.rewind is not None:
+        print(f"rewound {ws.rewind.pom_path} to {ws.rewind.sha[:7]} (committed {ws.rewind.committed_at}); synthetic")
+    print("stopped after workspace setup: planning arrives in milestone 5")
+    print(f"review: git diff {ws.repo.base_sha[:7]}..{ws.branch}")
+    print(f"cleanup: giml clean {ws.repo.project_dir}")
+    return ExitCode.SUCCESS
+
+
+def cmd_clean(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
+    if args.all and args.path:
+        raise UsageError("pass a project path or --all, not both")
+    for line in workspace.clean(root, store, env.clock, args.path, args.all, args.branches):
+        print(line)
     return ExitCode.SUCCESS
 
 
@@ -157,10 +203,21 @@ def main(argv: Sequence[str] | None = None, env: Environment | None = None) -> i
         with SqliteStateStore(root / "state.db") as store:
             if args.command == "sync":
                 return cmd_sync(args, env, store, root)
+            if args.command == "plan":
+                return cmd_plan(args, env, store, root)
+            if args.command == "clean":
+                return cmd_clean(args, env, store, root)
             return cmd_status(env, store, root)
-    except (UsageError, PomError, StoreError) as exc:
+    except (PreflightRefusal, LockHeld) as exc:
+        print(f"giml: refused: {exc}", file=sys.stderr)
+        return ExitCode.PREFLIGHT_REFUSAL
+    except UnsupportedProjectError as exc:
+        print(f"giml: unsupported: {exc}", file=sys.stderr)
+        return ExitCode.INELIGIBLE
+    except (UsageError, PomError, StoreError, RewindError, IdentityError) as exc:
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.CONFIGURATION
-    except (FetchError, MetadataError, zipfile.BadZipFile, sqlite3.Error, OSError) as exc:
+    except (FetchError, MetadataError, GitError, BranchExistsError, ForeignWorktreeError,
+            zipfile.BadZipFile, sqlite3.Error, OSError) as exc:  # fmt: skip
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.INFRASTRUCTURE

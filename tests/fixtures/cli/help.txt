@@ -5,7 +5,9 @@ Gated Increments (ML)
 positional arguments:
   COMMAND
     sync                fetch/refresh data snapshots (network)
-    status              show snapshot ages and the state directory
+    status              show snapshot ages, the state directory and crashed runs
+    plan                plan upgrades for a project (M2: sets up the workspace only)
+    clean               remove giml worktrees (and optionally result branches)
 
 options:
   -h, --help            show this help message and exit

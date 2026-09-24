@@ -1,0 +1,9 @@
+usage: giml plan [-h] [--allow-detached] [--rewind-to COMMIT] path
+
+positional arguments:
+  path                project directory containing pom.xml
+
+options:
+  -h, --help          show this help message and exit
+  --allow-detached    allow a detached HEAD as the base
+  --rewind-to COMMIT  start from pom.xml as it was at COMMIT (synthetic)

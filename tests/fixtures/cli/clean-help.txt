@@ -1,0 +1,9 @@
+usage: giml clean [-h] [--all] [--branches] [path]
+
+positional arguments:
+  path        project directory (default: current directory)
+
+options:
+  -h, --help  show this help message and exit
+  --all       clean every project giml knows
+  --branches  also delete giml result branches

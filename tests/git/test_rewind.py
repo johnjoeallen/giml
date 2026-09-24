@@ -86,8 +86,9 @@ def test_commit_without_pom_is_rejected(tmp_path):
         resolve_rewind(preflight(repo), "HEAD~1")
 
 
-def test_identical_pom_is_rejected(history, tmp_path):
+@pytest.mark.parametrize("commit", ["HEAD", "HEAD~1"], ids=["base-itself", "unchanged-pom"])
+def test_identical_pom_is_rejected_before_any_worktree_exists(history, commit):
     repo, _ = history
-    state, worktree = workspace(repo, tmp_path)
-    with pytest.raises(RewindError, match="pom.xml is identical to the base commit's"):
-        apply_rewind(worktree, resolve_rewind(state, "HEAD"), developer_identity(repo))
+    commit_files(repo, {"README": "later docs\n"}, "docs only: HEAD~1 has the same pom.xml as HEAD")
+    with pytest.raises(RewindError, match="pom.xml at .* is identical to the base commit's"):
+        resolve_rewind(preflight(repo), commit)
