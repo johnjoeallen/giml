@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
-from giml.core.model import ProjectRecord, RunRecord, SnapshotInfo
+from giml.core.model import GateResultRecord, ProjectRecord, RunRecord, SnapshotInfo
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 
@@ -142,10 +142,10 @@ class SqliteStateStore:
 
     def start_run(self, run: RunRecord) -> None:
         self._conn.execute(
-            "INSERT INTO run (id, project_id, base_sha, branch, worktree_path, started_at, rewind_from_sha) "  # pragma: no mutate
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",  # pragma: no mutate
+            "INSERT INTO run (id, project_id, base_sha, branch, worktree_path, started_at, rewind_from_sha, kind) "  # pragma: no mutate
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",  # pragma: no mutate
             (run.id, run.project_id, run.base_sha, run.branch, str(run.worktree_path),
-             _utc_text(run.started_at), run.rewind_from_sha),
+             _utc_text(run.started_at), run.rewind_from_sha, run.kind),
         )  # fmt: skip
 
     def finish_run(self, run_id: str, finished_at: datetime.datetime, stop_reason: str) -> None:
@@ -166,10 +166,31 @@ class SqliteStateStore:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._conn.execute(
             "SELECT id, project_id, base_sha, branch, worktree_path, started_at, finished_at, "  # pragma: no mutate
-            f"stop_reason, rewind_from_sha FROM run{where} ORDER BY started_at, id",  # pragma: no mutate
+            f"stop_reason, rewind_from_sha, kind FROM run{where} ORDER BY started_at, id",  # pragma: no mutate
             params,
         ).fetchall()
         return [_run_from_row(row) for row in rows]
+
+    def save_gate_result(self, result: GateResultRecord) -> None:
+        self._conn.execute(
+            "INSERT INTO gate_result (run_id, project_id, base_sha, config_version, earned_tier, json, "  # pragma: no mutate
+            "measured_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",  # pragma: no mutate
+            (result.run_id, result.project_id, result.base_sha, result.config_version, result.earned_tier,
+             result.json, _utc_text(result.measured_at), _utc_text(result.expires_at)),
+        )  # fmt: skip
+
+    def latest_gate_result(self, project_id: str) -> GateResultRecord | None:
+        row = self._conn.execute(
+            "SELECT run_id, project_id, base_sha, config_version, earned_tier, json, measured_at, expires_at "  # pragma: no mutate
+            "FROM gate_result WHERE project_id = ? ORDER BY measured_at DESC, run_id DESC LIMIT 1",  # pragma: no mutate
+            (project_id,),
+        ).fetchone()
+        return _gate_result_from_row(row) if row else None
+
+
+def _gate_result_from_row(row: tuple) -> GateResultRecord:
+    run_id, project_id, base_sha, version, tier, data, measured, expires = row
+    return GateResultRecord(run_id, project_id, base_sha, version, tier, data, _parse_time(measured), _parse_time(expires))
 
 
 def _parse_time(text: str | None) -> datetime.datetime | None:
@@ -182,9 +203,9 @@ def _project_from_row(row: tuple) -> ProjectRecord:
 
 
 def _run_from_row(row: tuple) -> RunRecord:
-    run_id, project_id, base_sha, branch, worktree, started, finished, stop_reason, rewind = row
+    run_id, project_id, base_sha, branch, worktree, started, finished, stop_reason, rewind, kind = row
     return RunRecord(run_id, project_id, base_sha, branch, Path(worktree), _parse_time(started),
-                     _parse_time(finished), stop_reason, rewind)  # fmt: skip
+                     _parse_time(finished), stop_reason, rewind, kind)  # fmt: skip
 
 
 def _snapshot_from_row(row: tuple) -> SnapshotInfo:

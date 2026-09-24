@@ -163,3 +163,30 @@ def test_finishing_twice_or_unknown_run_is_an_error(tmp_path):
 def test_run_requires_known_project(tmp_path):
     with SqliteStateStore(tmp_path / "state.db") as store, pytest.raises(sqlite3.IntegrityError):
         store.start_run(run("r1", project_id="missing"))
+
+
+from giml.core.model import GateResultRecord  # noqa: E402
+
+
+def test_run_kind_defaults_to_plan_and_round_trips(tmp_path):
+    with SqliteStateStore(tmp_path / "state.db") as store:
+        store.save_project(project())
+        store.start_run(run("r1"))
+        store.start_run(RunRecord("r2", "demo-12345678", "c" * 40, "giml/assess/c/1", Path("/w"), T0, kind="assess"))
+        assert [r.kind for r in store.list_runs()] == ["plan", "assess"]
+
+
+def test_gate_results_round_trip_and_latest_wins(tmp_path):
+    def result(run_id, minute, tier):
+        measured = T0 + datetime.timedelta(minutes=minute)
+        return GateResultRecord(run_id, "demo-12345678", "c" * 40, 3, tier, '{"x": 1}', measured,
+                                measured + datetime.timedelta(days=30))  # fmt: skip
+
+    with SqliteStateStore(tmp_path / "state.db") as store:
+        store.save_project(project())
+        assert store.latest_gate_result("demo-12345678") is None
+        for run_id, minute, tier in (("r1", 0, "B"), ("r2", 5, None)):
+            store.start_run(run(run_id, minute=minute))
+            store.save_gate_result(result(run_id, minute, tier))
+        assert store.latest_gate_result("demo-12345678") == result("r2", 5, None)
+        assert store.latest_gate_result("other") is None

@@ -126,3 +126,16 @@ class RunRecord:
     finished_at: datetime.datetime | None = None
     stop_reason: str | None = None
     rewind_from_sha: str | None = None
+    kind: str = "plan"  # "plan" or "assess"
+
+
+@dataclass(frozen=True)
+class GateResultRecord:
+    run_id: str
+    project_id: str
+    base_sha: str
+    config_version: int
+    earned_tier: str | None
+    json: str
+    measured_at: datetime.datetime
+    expires_at: datetime.datetime

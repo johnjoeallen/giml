@@ -10,7 +10,15 @@ import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from giml.core.model import Coordinate, Finding, ProjectRecord, RunRecord, SnapshotInfo, VersionRelease
+from giml.core.model import (
+    Coordinate,
+    Finding,
+    GateResultRecord,
+    ProjectRecord,
+    RunRecord,
+    SnapshotInfo,
+    VersionRelease,
+)
 
 
 class StateStore(Protocol):
@@ -42,6 +50,12 @@ class StateStore(Protocol):
 
     def list_runs(self, project_id: str | None = None, unfinished_only: bool = False) -> list[RunRecord]:
         """Runs, oldest first, optionally for one project or only unfinished (M2)."""
+
+    def save_gate_result(self, result: GateResultRecord) -> None:
+        """Store an assessment result (M3)."""
+
+    def latest_gate_result(self, project_id: str) -> GateResultRecord | None:
+        """The most recent assessment of a project, expired or not (M3)."""
 
 
 class ResultCache(Protocol):
