@@ -223,7 +223,7 @@ def test_every_stage_attempt_and_a_labelled_example_are_logged(tmp_path, repo, c
     assert [(a.stage, a.outcome, a.cache_hit, a.duration_ms) for a in attempts] == [
         ("compile", "pass", False, 1500), ("unit_test", "pass", False, 1500), ("enforcer", "pass", False, 1500)]  # fmt: skip
     assert all(a.cache_key and len(a.cache_key) == 64 for a in attempts) and len({a.cache_key for a in attempts}) == 3
-    assert len(examples) == 3 and {e.split_group for e in examples} == {state.id.split(":")[0] and examples[0].split_group}
+    assert len(examples) == 3 and len({e.split_group for e in examples}) == 1
     assert examples[0].split_group.startswith("proj-")  # the project key: examples are split by project
     (run,) = runs(tmp_path)
     assert baseline_report(tmp_path, run)["logged"] == {"attempts": 3, "new_examples": 3}
