@@ -16,7 +16,7 @@ LIB = Coordinate.parse("o:lib")
 
 
 def settings(strategy="conservative", scope="cve", major_updates="disallowed", cooldown=7) -> PlanningSettings:
-    return PlanningSettings(cooldown, 60, 120, strategy, scope, major_updates)
+    return PlanningSettings(cooldown, 60, 120, strategy, scope, major_updates, 7)
 
 
 class FakeAdvisories:
@@ -228,6 +228,11 @@ def test_latest_strategy_scope_cve_leaves_other_dependencies_alone():
 def test_no_metadata_for_the_artifact():
     result = plan("1.0.0", FakeAdvisories(A="1.0.1"), None)
     assert (result.candidates, result.status) == ((), "no_metadata")
+    assert plan("1.0.0", FakeAdvisories(), None, settings(scope="general")).status == "no_metadata"
+
+
+def test_a_dependency_out_of_scope_does_not_need_metadata():
+    assert plan("1.0.0", FakeAdvisories(), None).status == "unchanged_scope"
 
 
 @pytest.mark.parametrize(("origin", "with_site", "change"), [

@@ -264,6 +264,7 @@ planning:
   strategy: conservative          # how far versions move: conservative (default; patch, then minor) or latest. See section 8
   scope: cve                      # what may move: cve (default; only CVE-affected dependencies) or general (CVE first, then the rest)
   major_updates: disallowed       # disallowed (default) | allowed | ml (only with ML evidence that no code change is needed). See section 8.7
+  max_snapshot_age_days: 7        # planning warns when a data snapshot is older than this (section 7.3)
 ```
 
 All numbers are **placeholders** to be calibrated after the survey run (milestone 3). They are configurable, and projects **choose a tier**, they do not set numbers. Changing a tier's numbers, or the structure of the gate settings (`tiers`, `autonomy`, `verification`, `shared`), bumps `version` and triggers re-evaluation of existing results. Planning settings (`planning`) never affect an assessment, so changing them does not.

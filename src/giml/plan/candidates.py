@@ -169,8 +169,10 @@ def plan_dependency(
     ids = tuple(sorted({f.advisory_id for f in dependency.findings}))
     base = {"coordinate": dependency.coordinate, "version": dependency.version, "cve_affected": cve_affected,
             "advisories": ids, "change": change, "sites": sites}  # fmt: skip
+    in_scope = cve_affected or options.scope == "general"
     if releases is None:
-        return DependencyPlan(**base, status=NO_METADATA, candidates=(), held_by_cooldown=())
+        status = NO_METADATA if in_scope else UNCHANGED_SCOPE  # out of scope, its versions are never needed
+        return DependencyPlan(**base, status=status, candidates=(), held_by_cooldown=())
     ladder = _Ladder(dependency, releases, advisories, options, now)
     kinds: dict[str, list[str]] = {}
 
@@ -178,7 +180,6 @@ def plan_dependency(
         if version is not None:
             kinds.setdefault(version, []).append(kind)
 
-    in_scope = cve_affected or options.scope == "general"
     if in_scope and options.strategy == "latest":
         add(LATEST, ladder.newest(False))
         add(LATEST_IN_MAJOR, ladder.newest(True))

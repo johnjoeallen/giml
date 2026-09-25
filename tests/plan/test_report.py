@@ -45,10 +45,11 @@ def inputs(deps, plans, options=None, tier_status=None, latest=None, **extra) ->
     exposure = TreeExposure(tuple(deps), Exposure(SeverityRating.HIGH, 1, 1), "osv-1")
     return ReportInputs(
         project="proj", base_sha="abc1234def", run_id="run-1", worktree=ROOT, generated_at=NOW, config_version=3,
-        options=options or PlanningSettings(7, 60, 120, "conservative", "cve", "disallowed"),
+        options=options or PlanningSettings(7, 60, 120, "conservative", "cve", "disallowed", 7),
         tier=tier_status or tier(), snapshots={"osv": "osv-1", "central": "central-1"},
         jdk={"version": "21.0.9", "home": "/jdk", "source": "global config"}, exposure=exposure, plans=tuple(plans),
         latest_available=latest or {}, parents=extra.get("parents", ()), skipped=extra.get("skipped", ()),
+        warnings=extra.get("warnings", ()),
     )  # fmt: skip
 
 
@@ -84,7 +85,7 @@ def test_major_only_fix_is_left_open_with_the_mode():
     blocked = candidate(["cve_major"], "3.0.1", blocked="major update: major_updates is disallowed")
     report = one_dep(dep, plan(dep, "fix_blocked_major", [blocked]))
     assert reason_of(report, "o:l") == "CVE-A left open: the only fix is a major update (2.x to 3.0.1) and `major_updates` is `disallowed`"
-    ml = PlanningSettings(7, 60, 120, "conservative", "cve", "ml")
+    ml = PlanningSettings(7, 60, 120, "conservative", "cve", "ml", 7)
     blocked_ml = candidate(["cve_major"], "3.0.1", blocked="major update: major_updates is ml and there is no ML evidence")
     assert "`major_updates` is `ml` and there is no ML evidence" in reason_of(
         one_dep(dep, plan(dep, "fix_blocked_major", [blocked_ml]), options=ml), "o:l")  # fmt: skip
@@ -103,7 +104,7 @@ def test_no_fix_reason_mentions_cooldown_and_metadata():
 def test_latest_strategy_reason_names_the_aspirational_candidate():
     dep = resolved("o:l", "2.17.1", [finding("A", "o:l", "2.17.1")])
     p = plan(dep, "fix_available", [candidate(["latest_in_major"], "2.19.4"), candidate(["cve_patch"], "2.17.3")])
-    options = PlanningSettings(7, 60, 120, "latest", "cve", "disallowed")
+    options = PlanningSettings(7, 60, 120, "latest", "cve", "disallowed", 7)
     assert reason_of(one_dep(dep, p, options=options), "o:l") == (
         "CVE-A: aim for 2.19.4 (latest_in_major), demoting to 2.17.3 (cve_patch) if it fails; a candidate, not built (dry run)")
 
@@ -198,6 +199,14 @@ def test_header_fields_and_declaration_notes():
     assert report["skipped_declarations"] == ["pom.xml: dependencies ${g}:a"]
     assert report["generated_at"] == NOW.isoformat() and report["proposals_allowed"] is True
     json.dumps(report)  # plain JSON types only
+
+
+def test_warnings_are_carried_into_both_forms():
+    dep = resolved("o:m", "1")
+    report = build_report(inputs([dep], [plan(dep, "up_to_date")], warnings=("osv snapshot osv-1 is 9 days old",)))
+    assert report["warnings"] == ["osv snapshot osv-1 is 9 days old"]
+    assert "## Warnings\n\n- osv snapshot osv-1 is 9 days old" in render_markdown(report)
+    assert "## Warnings" not in render_markdown(build_report(inputs([dep], [plan(dep, "up_to_date")])))
 
 
 def test_markdown_rendering():

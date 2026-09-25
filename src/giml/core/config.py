@@ -64,6 +64,7 @@ class PlanningSettings:
     strategy: str
     scope: str
     major_updates: str
+    max_snapshot_age_days: int  # planning warns when a data snapshot is older than this (spec 7.3)
 
 
 @dataclass(frozen=True)
@@ -215,6 +216,7 @@ def parse_gate_config(text: str) -> GateConfig:
         strategy=planning_section.choice("strategy", PLANNING_STRATEGIES),
         scope=planning_section.choice("scope", PLANNING_SCOPES),
         major_updates=planning_section.choice("major_updates", MAJOR_UPDATE_MODES),
+        max_snapshot_age_days=planning_section.int("max_snapshot_age_days", minimum=1),
     )
     planning_section.finish()
     root.finish()

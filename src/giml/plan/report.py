@@ -54,6 +54,7 @@ class ReportInputs:
     latest_available: dict[Coordinate, str | None]  # the newest release of each artifact, when Central has it
     parents: Sequence[ExternalParent]
     skipped: Sequence[str]
+    warnings: Sequence[str]  # for example a stale snapshot
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -190,7 +191,7 @@ def build_report(inputs: ReportInputs) -> dict:
     exposure = inputs.exposure.exposure
     return {
         "kind": "dry_run", "project": inputs.project, "base_sha": inputs.base_sha, "run_id": inputs.run_id,
-        "worktree": str(inputs.worktree), "generated_at": inputs.generated_at.isoformat(),
+        "generated_at": inputs.generated_at.isoformat(),
         "config_version": inputs.config_version,
         "planning": {"strategy": inputs.options.strategy, "scope": inputs.options.scope,
                      "major_updates": inputs.options.major_updates,
@@ -207,7 +208,7 @@ def build_report(inputs: ReportInputs) -> dict:
         "sync_command": "giml sync --central " + " ".join(f"--coordinate {c}" for c in missing) if missing else None,
         "external_parents": [{"coordinate": str(p.coordinate), "version": p.version,
                               "file": _relative(p.pom, inputs.worktree), "line": p.site.line} for p in inputs.parents],  # fmt: skip
-        "skipped_declarations": list(inputs.skipped),
+        "skipped_declarations": list(inputs.skipped), "warnings": list(inputs.warnings),
     }
 
 
@@ -255,6 +256,8 @@ def render_markdown(report: dict) -> str:
     if not report["proposals_allowed"]:
         lines += ["", "**Report only:** no usable tier, so no candidates are proposed."]
     summary = report["summary"]
+    if report["warnings"]:
+        lines += ["", "## Warnings", "", *[f"- {w}" for w in report["warnings"]]]
     lines += ["", "## Summary", "", "| " + " | ".join(summary) + " |", "|" + "---|" * len(summary),
               "| " + " | ".join(str(v) for v in summary.values()) + " |"]  # fmt: skip
     affected = [e for e in report["dependencies"] if e["cve_affected"]]

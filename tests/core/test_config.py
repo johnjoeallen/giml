@@ -34,7 +34,7 @@ def test_default_config_loads_as_specified():
     )  # fmt: skip
     assert config.shared.flake_check_runs == 5
     assert (config.planning.strategy, config.planning.scope) == ("conservative", "cve")
-    assert config.planning.major_updates == "disallowed"
+    assert config.planning.major_updates == "disallowed" and config.planning.max_snapshot_age_days == 7
     assert config.planning.release_cooldown_days == 7
     assert config.warnings == ()
 
@@ -79,6 +79,7 @@ def test_missing_key_is_rejected():
         (("shared",), "touchpoint_thresholds", "custom", "one of same_as_tier"),
         (("planning",), "release_cooldown_days", -1, "integer >= 0"),
         (("planning",), "max_wall_minutes", 1.5, "integer >= 1"),
+        (("planning",), "max_snapshot_age_days", 0, "integer >= 1"),
         (("planning",), "strategy", "conservative_patch", "one of conservative, latest"),
         (("planning",), "strategy", True, "one of conservative, latest"),
         (("planning",), "scope", "all", "one of cve, general"),
@@ -339,7 +340,7 @@ def test_planning_accepts_every_major_update_mode(mode):
     assert parse(data).planning.major_updates == mode
 
 
-@pytest.mark.parametrize("key", ["strategy", "scope", "major_updates"])
+@pytest.mark.parametrize("key", ["strategy", "scope", "major_updates", "max_snapshot_age_days"])
 def test_planning_strategy_and_scope_are_required(key):
     data = default_data()
     del data["planning"][key]
