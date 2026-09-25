@@ -10,6 +10,8 @@ evaluation found best. A ladder with no usable step keeps the reason, so the rep
 
 from __future__ import annotations
 
+import dataclasses
+import datetime
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +21,7 @@ from giml.maven.declarations import Declarations, Site
 from giml.maven.pom_change import AddPin, Change, SetVersion
 from giml.maven.version import ComparableVersion
 from giml.plan.analysis import Analysis
-from giml.plan.candidates import EDIT, NEXT_MINOR, NEXT_PATCH, PIN, UPDATE_AVAILABLE, DependencyPlan, level
+from giml.plan.candidates import EDIT, NEXT_MINOR, NEXT_PATCH, PIN, UPDATE_AVAILABLE, DependencyPlan, eligible_versions, level
 from giml.plan.search import Ladder, Step
 
 _LEVELS = ("patch", "minor", "major")
@@ -109,12 +111,13 @@ def _short(members: list[DependencyPlan]) -> str:
     return str(members[0].coordinate) if len(members) == 1 else "+".join(m.coordinate.artifact_id for m in members)
 
 
-def _group_proposal(members: list[DependencyPlan], sites: tuple[Site, ...], analysis: Analysis, mode: str, root_pom: Path) -> Proposal:
+def _group_proposal(members: list[DependencyPlan], sites: tuple[Site, ...], analysis: Analysis, mode: str, root_pom: Path,
+                    newest: list[tuple[str, str]] | None = None) -> Proposal:  # fmt: skip
     members = sorted(members, key=lambda m: str(m.coordinate))
     coordinates = "+".join(str(m.coordinate) for m in members)
     key = f"dep:{coordinates}@{min((m.version for m in members), key=ComparableVersion)}"
     unsupported = [m for m in members if m.change == "unsupported"]
-    steps_data = [] if unsupported else _group_steps(members)
+    steps_data = [] if unsupported else newest if newest is not None else _group_steps(members)
     note, blocked = "", tuple(sorted({c.blocked for m in members for c in m.candidates if c.blocked}))
     if unsupported:
         note = "giml cannot edit where this version comes from"
@@ -134,13 +137,45 @@ def _group_proposal(members: list[DependencyPlan], sites: tuple[Site, ...], anal
             changes = tuple(AddPin(root_pom, m.coordinate, version, f"{_labels(findings)}; re-evaluate on a new release") for m in members[:1])
         moves.append(Move(changes, advisories))
     rating = max((_severity(m, analysis) for m in members), default=0)
-    ladder = Ladder(key, tuple(steps), -rating, note)  # the order is fixed up by the caller, worst first
+    ladder = Ladder(key, tuple(steps), -rating, note, highest=newest is not None)  # the order is fixed up by the caller, worst first
     return Proposal(ladder, tuple(moves), tuple(str(m.coordinate) for m in members), "dependency", blocked)
 
 
-def _general_proposal(members: list[DependencyPlan], sites: tuple[Site, ...]) -> Proposal | None:
-    """A one-step ladder for a general update: the next patch or minor, when every member agrees on it."""
+def _latest_steps(members: list[DependencyPlan], analysis: Analysis, options, now: datetime.datetime) -> list[tuple[str, str]] | None:
+    """Every version of the same major that every member may move to, oldest first (the `latest` strategy's ladder).
+
+    A CVE-affected member only takes versions from its lowest fix in that major upwards. None when there is
+    no such ladder (no metadata, or the fix needs a major update), so the caller falls back to the conservative steps.
+    """
+    pools = []
+    for member in members:
+        releases = analysis.available.get(member.coordinate)
+        if not releases:
+            return None
+        pool, _, _ = eligible_versions(member.version, releases, options.release_cooldown_days, now)
+        pool = [v for v in pool if level(member.version, v) != "major"]
+        if member.cve_affected:
+            fixes = [c.version for c in member.candidates if c.clears and c.blocked is None and level(member.version, c.version) != "major"]
+            if not fixes:
+                return None
+            floor = ComparableVersion(min(fixes, key=ComparableVersion))
+            pool = [v for v in pool if ComparableVersion(v) >= floor]
+        pools.append(set(pool))
+    common = set.intersection(*pools)
+    return [("latest_in_major", v) for v in sorted(common, key=ComparableVersion)] or None
+
+
+def _general_proposal(members: list[DependencyPlan], sites: tuple[Site, ...],
+                      newest: list[tuple[str, str]] | None = None) -> Proposal | None:  # fmt: skip
+    """A ladder for a general update: one step (the next patch or minor, when every member agrees on it),
+    or under `latest` every same-major version, newest wanted."""
     members = sorted(members, key=lambda m: str(m.coordinate))
+    if newest:
+        key = f"upd:{'+'.join(str(m.coordinate) for m in members)}@{members[0].version}"
+        steps = tuple(Step(key, f"{_short(members)} {members[0].version} → {version} ({kind})", kind, rank)
+                      for rank, (kind, version) in enumerate(newest))  # fmt: skip
+        moves = tuple(Move(tuple(SetVersion(site, site_text(site), version) for site in sites), ()) for _, version in newest)
+        return Proposal(Ladder(key, steps, 0, highest=True), moves, tuple(str(m.coordinate) for m in members), "dependency")
     usable = [next((c for c in m.candidates if c.blocked is None and c.kinds[0] in (NEXT_PATCH, NEXT_MINOR)), None) for m in members]
     if any(c is None for c in usable) or len({(c.version, c.kinds[0]) for c in usable}) != 1:
         return None
@@ -151,7 +186,7 @@ def _general_proposal(members: list[DependencyPlan], sites: tuple[Site, ...]) ->
     return Proposal(Ladder(key, (Step(key, label, kind, 0),), 0), (Move(changes, ()),), tuple(str(m.coordinate) for m in members), "dependency")
 
 
-def dependency_proposals(analysis: Analysis, options, root_pom: Path) -> list[Proposal]:
+def dependency_proposals(analysis: Analysis, options, root_pom: Path, now: datetime.datetime | None = None) -> list[Proposal]:
     """Ladders for the CVE-affected dependencies, worst first; under ``scope: general`` then one step per other declared dependency."""
     groups: dict[object, list[DependencyPlan]] = {}
     sites_of: dict[object, tuple[Site, ...]] = {}
@@ -169,13 +204,19 @@ def dependency_proposals(analysis: Analysis, options, root_pom: Path) -> list[Pr
             group = ("pin" if plan.change != "unsupported" else "unsupported", plan.coordinate)
         groups.setdefault(group, []).append(plan)
         sites_of[group] = sites
-    proposals = [_group_proposal(members, sites_of[group], analysis, options.major_updates, root_pom) for group, members in groups.items()]
+    latest = options.strategy == "latest" and now is not None
+
+    def newest(members: list[DependencyPlan]) -> list[tuple[str, str]] | None:
+        return _latest_steps(members, analysis, options, now) if latest else None
+
+    proposals = [_group_proposal(members, sites_of[group], analysis, options.major_updates, root_pom, newest(members))
+                 for group, members in groups.items()]
     proposals.sort(key=lambda p: (p.ladder.order, p.ladder.key))
     cve_sites = {group for group in groups if isinstance(group, frozenset)}
     extra = [] if options.scope != "general" else [
         p for group, members in sorted(general.items(), key=lambda item: str(item[1][0].coordinate))
-        if not any(group & taken for taken in cve_sites) and (p := _general_proposal(members, sites_of[group])) is not None]
-    return [Proposal(Ladder(p.ladder.key, p.ladder.steps, index, p.ladder.note), p.moves, p.members, p.kind, p.blocked)
+        if not any(group & taken for taken in cve_sites) and (p := _general_proposal(members, sites_of[group], newest(members))) is not None]
+    return [Proposal(dataclasses.replace(p.ladder, order=index), p.moves, p.members, p.kind, p.blocked)
             for index, p in enumerate([*proposals, *extra])]  # fmt: skip
 
 

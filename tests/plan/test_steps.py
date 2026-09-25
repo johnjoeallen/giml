@@ -301,3 +301,29 @@ def Violation_of(rule, subject):
     from giml.maven.enforcer import Violation
 
     return Violation(rule, subject, {})
+
+
+def test_latest_gives_every_same_major_version_from_the_lowest_fix_upwards_newest_wanted(world):
+    opts = options(strategy="latest")
+    proposals = by_key(dependency_proposals(analysis(world, opts), opts, world[0], NOW))
+    lib = proposals["dep:o:lib@1.0.0"]
+    assert lib.ladder.highest and [s.label.split(" → ")[1].split(" ")[0] for s in lib.ladder.steps] == ["1.0.2", "1.0.3", "1.1.0"]
+    assert {s.kind for s in lib.ladder.steps} == {"latest_in_major"}
+    assert [m.changes[0].version for m in lib.moves] == ["1.0.2", "1.0.3", "1.1.0"]
+
+
+def test_latest_falls_back_to_the_conservative_steps_when_the_fix_needs_a_major(world):
+    opts = options(strategy="latest")
+    major = by_key(dependency_proposals(analysis(world, opts), opts, world[0], NOW))["dep:o:major@2.0"]
+    assert not major.ladder.highest and major.ladder.steps == ()  # the only fix is a major, which is gated
+
+
+def test_latest_general_scope_offers_the_newest_versions_of_other_dependencies(world):
+    opts = options(strategy="latest", scope="general")
+    clean = by_key(dependency_proposals(analysis(world, opts), opts, world[0], NOW))["upd:o:clean@1.0.0"]
+    assert clean.ladder.highest and [m.changes[0].version for m in clean.moves] == ["1.0.1"]
+
+
+def test_conservative_ladders_are_not_bisected(world):
+    proposals = dependency_proposals(analysis(world), options(), world[0], NOW)
+    assert not any(p.ladder.highest for p in proposals)

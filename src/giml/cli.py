@@ -229,8 +229,6 @@ def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore
     overrides = {"strategy": args.strategy, "scope": args.scope, "major_updates": args.major_updates,
                  "major_updates_test_scope": args.major_updates_test_scope}  # fmt: skip
     options = dataclasses.replace(config.planning, **{k: v for k, v in overrides.items() if v})
-    if options.strategy == "latest":
-        raise UsageError("strategy latest is not implemented yet (milestone 5, checkpoint B); use conservative")
     verified: list[BaselineRun] = []
     planned: list[PlanRun] = []
 

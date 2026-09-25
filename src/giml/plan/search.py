@@ -34,6 +34,7 @@ class Ladder:
     steps: tuple[Step, ...]  # only steps a build may try; blocked ones are not here
     order: int  # processing order: important fixes first
     note: str = ""  # why there are no steps, when there are none
+    highest: bool = False  # steps ascend and the newest that passes is wanted (the `latest` strategy), not the first
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,30 @@ class _Run:
         return verdict
 
 
+def _bisect(run: _Run, ladder: Ladder, accepted: dict[str, Step], tried: list[tuple[int, str]]) -> int | None:
+    """The index of the newest step that passes in the context of what is already accepted, or None.
+
+    The newest is tried first; if it fails the search chops backwards to a step that passes, then narrows
+    towards the newest passing one (forward towards the last failure, back again) until the two are adjacent.
+    The oldest step failing ends the search: nothing in this ladder can be taken.
+    """
+
+    def passes(index: int) -> bool:
+        verdict = run.check({**accepted, ladder.key: ladder.steps[index]}, "ladder")
+        if not verdict.passed:
+            tried.append((ladder.steps[index].rank, verdict.reason))
+        return verdict.passed
+
+    top = len(ladder.steps) - 1
+    if passes(top):
+        return top
+    low, high = -1, top
+    while high - low > 1:
+        middle = (low + high) // 2
+        low, high = (middle, high) if passes(middle) else (low, middle)
+    return low if low >= 0 else None
+
+
 def _fix_ladders(run: _Run, ladders: list[Ladder]) -> tuple[dict[str, Step], dict[str, Deferral], _Stop | None]:
     accepted: dict[str, Step] = {}
     deferred: dict[str, Deferral] = {}
@@ -170,6 +195,13 @@ def _fix_ladders(run: _Run, ladders: list[Ladder]) -> tuple[dict[str, Step], dic
             continue
         tried: list[tuple[int, str]] = []
         try:
+            if ladder.highest:
+                found = _bisect(run, ladder, accepted, tried)
+                if found is not None:
+                    accepted[ladder.key] = ladder.steps[found]
+                else:
+                    deferred[ladder.key] = Deferral(f"no version passed, not even the oldest ({ladder.steps[0].label}): {tried[-1][1]}", tuple(tried))
+                continue
             for step in ladder.steps:
                 verdict = run.check({ladder.key: step}, "ladder")
                 if verdict.passed:
@@ -209,7 +241,8 @@ def _combine(run: _Run, accepted: dict[str, Step], ladders: dict[str, Ladder], d
 def _advance(run: _Run, accepted: dict[str, Step], ladders: dict[str, Ladder], culprits: list[str]) -> bool:
     """Offer each culprit its next ladder steps in the context of the others; True when the whole set passes."""
     for key in culprits:
-        for step in ladders[key].steps[accepted[key].rank + 1 :]:
+        ladder, rank = ladders[key], accepted[key].rank
+        for step in (reversed(ladder.steps[:rank]) if ladder.highest else ladder.steps[rank + 1 :]):
             candidate = {**accepted, key: step}
             if run.check(candidate, "advance").passed:
                 accepted[key] = step

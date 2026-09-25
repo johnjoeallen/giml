@@ -183,3 +183,45 @@ def test_ddmin_finds_the_hidden_minimal_set_within_a_bound(n, k, rng):
     found = ddmin(list(range(n)), fails)
     assert set(found) == hidden
     assert len(calls) <= 2 * n * max(1, n.bit_length()) + 8  # a generous polynomial bound: it never degenerates into trying everything
+
+
+def highest(key, count, order=0):
+    steps = tuple(Step(key, f"{key} v{rank}", "latest_in_major", rank) for rank in range(count))
+    return Ladder(key, steps, order, highest=True)
+
+
+def threshold(limit):
+    """Steps above ``limit`` fail: a monotone hidden truth."""
+    return Fake(bad={("a", rank) for rank in range(limit + 1, 64)})
+
+
+def test_the_newest_step_is_taken_when_it_passes_in_one_build():
+    fake = Fake()
+    outcome = run([highest("a", 8)], fake)
+    assert outcome.accepted["a"].rank == 7 and outcome.builds == 1
+
+
+@pytest.mark.parametrize("limit", range(8))
+def test_a_failing_newest_step_is_chopped_back_to_the_newest_that_passes(limit):
+    outcome = run([highest("a", 8)], threshold(limit))
+    assert outcome.accepted["a"].rank == limit and outcome.stop_reason == "complete"
+    assert outcome.builds <= 1 + 3 + 1  # the newest, log2(8) narrowing builds, at most one combination
+
+
+def test_when_even_the_oldest_step_fails_the_ladder_stops_and_says_so():
+    outcome = run([highest("a", 6)], Fake(bad={("a", rank) for rank in range(6)}))
+    assert outcome.accepted == {} and "not even the oldest (a v0)" in outcome.deferred["a"].reason
+    assert outcome.deferred["a"].tried[-1][0] == 0
+
+
+def test_a_highest_ladder_is_verified_in_the_context_of_what_is_already_accepted():
+    fake = Fake(interactions=[{("a", 3), ("b", 3)}])
+    outcome = run([highest("a", 4, order=0), highest("b", 4, order=1)], fake)
+    assert outcome.accepted["a"].rank == 3 and outcome.accepted["b"].rank == 2  # b backs off from the step that clashes with a
+    assert all(len(call) <= 2 for call in fake.calls)
+
+
+def test_an_interaction_found_at_the_combination_backs_a_highest_ladder_off_not_forward():
+    fake = Fake(interactions=[{("a", 3), ("c", 0)}])
+    outcome = run([highest("a", 4, order=1), ladder("c", "cve_patch", "cve_minor", order=0)], fake)
+    assert outcome.accepted["a"].rank < 3 and outcome.accepted["c"].rank == 0

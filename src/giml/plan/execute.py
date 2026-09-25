@@ -164,14 +164,14 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
     if phase(unit_proposals(analysis)):
         analysis = reanalyse("02-tree.log", True)
     if stop != "inconclusive":
-        if phase(_dependency_phase(analysis, options, root_pom, trial.reference), "dependency"):
+        if phase(_dependency_phase(analysis, options, root_pom, trial.reference, clock()), "dependency"):
             analysis = reanalyse("03-tree.log", False)
     return PlanOutcome(tuple(committed), tuple(left), builds, stop, detail, before, analysis.exposure.exposure, held, next(iter(naive), None))
 
 
-def _dependency_phase(analysis: Analysis, options, root_pom: Path, violations) -> list[Proposal]:
+def _dependency_phase(analysis: Analysis, options, root_pom: Path, violations, now: datetime.datetime) -> list[Proposal]:
     """CVE ladders first, then the enforcer alignments, then general updates; ordered as one list for the search."""
-    proposals = dependency_proposals(analysis, options, root_pom)
+    proposals = dependency_proposals(analysis, options, root_pom, now)
     cve = [p for p in proposals if p.ladder.key.startswith("dep:")]
     rest = [p for p in proposals if not p.ladder.key.startswith("dep:")]
     ordered = [*cve, *enforcer_proposals(violations, analysis, root_pom), *rest]
