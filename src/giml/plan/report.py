@@ -193,6 +193,12 @@ def _leaves(unit: UnitPlan, version: str) -> str:
     return f" and leaves {left.total} (worst {left.max_severity.name})" if left.total else ", leaving none"
 
 
+def _best_blocked(unit: UnitPlan, baseline: tuple[int, int, int]):
+    """The version the major-update gate stopped that would leave less open than ``baseline``, if any."""
+    better = [e for e in unit.evaluations if e.blocked and e.exposure is not None and e.exposure.key < baseline]
+    return min(better, key=lambda e: (e.exposure.key, ComparableVersion(e.version)), default=None)
+
+
 def _unit_reason(unit: UnitPlan, options: PlanningSettings) -> str:
     coordinate = unit.unit.coordinate
     if unit.status == "improves":
@@ -201,10 +207,15 @@ def _unit_reason(unit: UnitPlan, options: PlanningSettings) -> str:
             return (f"aim for {aim.version} ({_clears(unit, aim.version)}), demoting to "
                     f"{floor.version} ({_clears(unit, floor.version)}) if it fails; {_DRY_RUN}")  # fmt: skip
         level = _evaluation(unit, floor.version).level
-        return (f"a {level} bump ({unit.unit.version} → {floor.version}) {_clears(unit, floor.version)} advisories"
+        text = (f"a {level} bump ({unit.unit.version} → {floor.version}) {_clears(unit, floor.version)} advisories"
                 f"{_leaves(unit, floor.version)}; {_DRY_RUN}")  # fmt: skip
+        blocked = _best_blocked(unit, _evaluation(unit, floor.version).exposure.key)
+        if blocked is not None:
+            text += f"; {blocked.version} would leave {blocked.exposure.total} of {unit.current.total} advisories but is blocked: {blocked.blocked}"
+        return text
     if unit.status == "blocked_major":
-        return f"the only improvement is blocked: {next(e.blocked for e in unit.evaluations if e.blocked)}"
+        blocked = _best_blocked(unit, unit.current.key)
+        return f"the only improvement is blocked: {blocked.version} would leave {blocked.exposure.total} of {unit.current.total} advisories; {blocked.blocked}"
     if unit.status == "no_metadata":
         return f"no Central metadata for {coordinate}; run `giml sync --central --coordinate {coordinate}`"
     if unit.status == "not_evaluated":

@@ -400,6 +400,13 @@ Enforcer violations at the base commit are planning goals too: for each `depende
 
 Parent/BOM upgrades (for example the Spring Boot parent) are first-class candidates; they change many managed versions at once and are treated as a single change unit, with their own candidates as above.
 
+**How a change unit is evaluated** (decided 2026-09-25). A unit is an external parent or an editable BOM import (a version giml can edit in place). What an upgrade is worth cannot be read off one artifact's advisories, so each newer version (no prereleases, none inside the cooldown, none across a major unless `major_updates` permits, at most 40 nearest first) is evaluated by writing it into the throwaway worktree's POM, **resolving the reactor's trees** (POMs only: no compile, no tests) and comparing the CVE exposure (section 8.5, criterion 1) with today's. The POM text is restored afterwards, even on failure, and the developer's checkout is never touched. A unit is evaluated only when the current tree has a CVE to fix and the tier allows proposals. Then:
+
+- `conservative` picks the smallest step that reaches the best exposure any usable version delivers: the lowest such version of the lowest level (patch, then minor, then major) that has one.
+- `latest` also aims for the newest usable version and keeps the conservative pick as the version to demote to.
+- The major-update gate (section 8.7) is applied to the resolved tree: a version that changes the major of any resolved dependency (a test-scoped library included) is blocked, but stays in the report with its exposure, and the reason line names the best blocked version next to the pick.
+- The report lists each evaluated version with its remaining, cleared and newly introduced advisories and how many dependencies it changes. These are candidates: like everything in a dry run they are unverified until built.
+
 ### 8.3 Search algorithm
 
 A **state** maps each upgradable dependency to a chosen version. `strategy` selects the search and `scope` selects the dependencies it covers (section 8.2). **CVEs come first:** the search runs in phases. Phase 1 covers the CVE-affected dependencies. Under `scope: general`, phase 2 covers all the other dependencies, starting from the state phase 1 produced. Under `scope: cve` there is no phase 2, and a dependency without a CVE moves only when forced (section 8.2): it then tries `next_patch`, or `next_minor` when no patch release exists, under either strategy, and stays at `current` if that fails.
@@ -698,7 +705,7 @@ Work in order; stop at each checkpoint.
 
 **M5a — Analysis, `giml plan --dry-run` (done before M4; reordered 2026-09-25)**
 - The no-build half of M5, so a project gets CVE and upgrade findings before the build machinery exists. It runs in a giml worktree at the base commit and only reads snapshots (section 7.3).
-- Steps, each its own increment: (1) resolve every reactor module's effective tree from the pinned dependency plugin's JSON output; (2) locate where each version is declared (direct, property, `dependencyManagement`, parent); (3) CVE exposure over the resolved tree from the OSV snapshot; (4) candidate ladder per section 8.2 for the chosen profile, with cooldown and pre-release rules; (5) the report (section 14): a reason line per upgradable dependency, remaining CVEs, enforcer violations, snapshot ids. Projects below Tier B, or without a valid assessment, get the report-only listing of outdated and vulnerable dependencies and no candidates.
+- Steps, each its own increment: (1) resolve every reactor module's effective tree from the pinned dependency plugin's JSON output; (2) locate where each version is declared (direct, property, `dependencyManagement`, parent); (3) CVE exposure over the resolved tree from the OSV snapshot; (4) candidate ladder per section 8.2 for the chosen strategy and scope, with cooldown and pre-release rules, and parent and BOM change units evaluated by resolution; (5) the report (section 14): a reason line per upgradable dependency, remaining CVEs, enforcer violations, snapshot ids. Projects below Tier B, or without a valid assessment, get the report-only listing of outdated and vulnerable dependencies and no candidates.
 - Candidates are listed, never built: `--dry-run` performs no builds and edits no POM.
 - Acceptance: on redkite, arete and grip the dry run lists the resolved tree, its CVEs and each dependency's candidates with reasons; results are identical for identical snapshots; the developer's checkout is untouched; nothing is fetched except by `giml sync`.
 

@@ -350,10 +350,25 @@ def test_no_improvement_reason_mentions_skipped_majors_and_truncation():
 def test_blocked_major_metadata_failed_and_not_evaluated_reasons():
     blocked = evaluation("3.3.6", total=0, cleared=list("ABCDE"), blocked="major update: changes o:lib from 2.x to 3.x; major_updates is disallowed")
     assert unit_reason(with_units([unit_plan("blocked_major", evaluations=[blocked])])) == (
-        "the only improvement is blocked: major update: changes o:lib from 2.x to 3.x; major_updates is disallowed")
+        "the only improvement is blocked: 3.3.6 would leave 0 of 5 advisories; "
+        "major update: changes o:lib from 2.x to 3.x; major_updates is disallowed")  # fmt: skip
     assert unit_reason(with_units([unit_plan("no_metadata")])) == (
         "no Central metadata for org.boot:starter-parent; run `giml sync --central --coordinate org.boot:starter-parent`")
     assert unit_reason(with_units([unit_plan("not_evaluated", note="no CVE to fix")])) == "not evaluated: no CVE to fix"
+
+
+def test_a_better_but_blocked_version_is_named_next_to_the_pick():
+    gate = "major update: changes org.hamcrest:hamcrest from 2.x to 3.x; major_updates is disallowed"
+    pick = evaluation("3.4.1", "minor", total=2, worst=SeverityRating.HIGH, cleared=list("ABC"))
+    better = evaluation("3.5.0", "minor", total=0, cleared=list("ABCDE"), blocked=gate)
+    worse = evaluation("3.5.1", "minor", total=4, worst=SeverityRating.HIGH, cleared=["A"], blocked=gate)
+    reason = unit_reason(with_units([unit_plan("improves", [("parent_minor", "3.4.1")], [pick, better, worse])]))
+    assert reason == ("a minor bump (3.3.5 → 3.4.1) clears 3 of 5 advisories and leaves 2 (worst HIGH); a candidate, not built "
+                      f"(dry run); 3.5.0 would leave 0 of 5 advisories but is blocked: {gate}")  # fmt: skip
+    only_worse = unit_reason(with_units([unit_plan("improves", [("parent_minor", "3.4.1")], [pick, worse])]))
+    assert "blocked" not in only_worse
+    lowest = unit_reason(with_units([unit_plan("blocked_major", evaluations=[worse, better])]))
+    assert lowest.startswith("the only improvement is blocked: 3.5.0 would leave 0 of 5 advisories; ")
 
 
 def test_unit_data_keeps_cooldown_truncation_skipped_and_failures():
