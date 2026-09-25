@@ -33,7 +33,7 @@ For a local Maven project in a git repository, giml:
 
 1. Verifies the repository is in a safe state (clean, git-managed).
 2. Assesses how trustworthy the project's tests are (**tier**), using unit coverage and PIT mutation results.
-3. Plans dependency upgrades starting from the current versions, by a chosen `strategy` and `scope` (section 8). By default (`conservative`, `cve`) a dependency with a known CVE gets the smallest version step that clears it (patch, then minor, then major) and a dependency without one is left alone unless the enforcer or an interaction forces a patch or minor step. `scope: general` also updates the other dependencies, CVEs first. `strategy: latest` instead searches down from the newest versions. Never blindly the newest by default. Bumps that interact are verified jointly.
+3. Plans dependency upgrades starting from the current versions, by a chosen `strategy` and `scope` (section 8). By default (`conservative`, `cve`) a dependency with a known CVE gets the smallest version step that clears it (patch, then minor, and major only where `major_updates` permits, below) and a dependency without one is left alone unless the enforcer or an interaction forces a patch or minor step. `scope: general` also updates the other dependencies, CVEs first. `strategy: latest` instead searches down from the newest versions. Never blindly the newest by default. **Never a major update by default:** `planning.major_updates` is `disallowed` unless set to `allowed`, or to `ml`, which allows a major update only where the ML layer has evidence that it needs no developer code changes (section 8.7). Bumps that interact are verified jointly.
 4. Verifies each candidate state by building, running tests, and **starting the packaged application** with a designated Spring profile.
 5. Leaves the result on a local **branch in a git worktree**. It never pushes and never opens a PR. The developer inspects and decides.
 6. Records every attempt as a labelled outcome for later machine learning.
@@ -263,6 +263,7 @@ planning:
   max_wall_minutes: 120
   strategy: conservative          # how far versions move: conservative (default; patch, then minor) or latest. See section 8
   scope: cve                      # what may move: cve (default; only CVE-affected dependencies) or general (CVE first, then the rest)
+  major_updates: disallowed       # disallowed (default) | allowed | ml (only with ML evidence that no code change is needed). See section 8.7
 ```
 
 All numbers are **placeholders** to be calibrated after the survey run (milestone 3). They are configurable, and projects **choose a tier**, they do not set numbers. Changing a tier's numbers, or the structure of the gate settings (`tiers`, `autonomy`, `verification`, `shared`), bumps `version` and triggers re-evaluation of existing results. Planning settings (`planning`) never affect an assessment, so changing them does not.
@@ -373,7 +374,7 @@ For each dependency version that is *declared or managed* in the project, build 
 
 **Strategy and scope** (decided 2026-09-25; both are options of `giml plan`, defaults in `planning`, section 6.1). They are independent:
 
-- `strategy` says how far and how fast a version moves, for CVE fixes and general updates alike. `conservative` (default) moves up from the current version one step at a time and stops at the first step that passes: patch, then minor (for a CVE fix, then major as a last resort). `latest` starts from the newest permitted versions and steps back where a build fails.
+- `strategy` says how far and how fast a version moves, for CVE fixes and general updates alike. `conservative` (default) moves up from the current version one step at a time and stops at the first step that passes: patch, then minor (for a CVE fix, then major as a last resort, only where major updates are permitted, section 8.7). `latest` starts from the newest permitted versions and steps back where a build fails.
 - `scope` says what may move. `cve` (default): only CVE-affected dependencies. A dependency without a CVE stays at `current`, unless it is **forced**: `current` fails in a state being verified (for example next to another dependency's CVE bump), or it must change to remove an enforcer violation (below). `general`: the CVE-affected dependencies are settled first, then every other dependency is updated too, on top of that result.
 
 A dependency is **CVE-affected** when a known vulnerability (OSV snapshot, section 7.1) affects its current version. "Clears" means fixes every known vulnerability affecting the current version. Which candidates each combination uses is given below.
@@ -392,6 +393,8 @@ A dependency is **CVE-affected** when a known vulnerability (OSV snapshot, secti
 
 "In scope" is every CVE-affected dependency, plus every other dependency under `scope: general`. Under `conservative`, a dependency that is not CVE-affected never gets a major step or `latest`.
 
+**Major updates are gated** (section 8.7): a candidate that would change a major version is dropped before it is built unless `planning.major_updates` permits it. With the default `disallowed` that removes `cve_major`, `latest` whenever it crosses a major, and any `bom_managed` or transitive change that crosses one.
+
 Enforcer violations at the base commit are planning goals too: for each `dependencyConvergence` or `banDuplicatePomDependencyVersions` violation, candidates include a `dependencyManagement` pin (section 8.4) at each version in conflict (and, under `latest` only, at the newest permitted version), and version changes to the dependencies that pull in the conflicting versions (under `conservative`, only their `cve_*` or `next_patch`/`next_minor` steps). When the project's settings set `allow_exclusions: true` (section 3.1), candidates also include excluding the offending transitive artifact from the dependency that pulls it in; without it, a violation that only an exclusion could fix (typically `banDuplicateClasses`) is reported as unresolved.
 
 Parent/BOM upgrades (for example the Spring Boot parent) are first-class candidates; they change many managed versions at once and are treated as a single change unit, with their own candidates as above.
@@ -402,7 +405,7 @@ A **state** maps each upgradable dependency to a chosen version. `strategy` sele
 
 **`conservative` (default): per dependency, up from current, stop at the first pass.** Start each phase from the baseline state (section 9.1), or from the previous phase's result, and treat each dependency of the phase independently:
 
-1. A CVE-affected dependency (phase 1) tries its ladder in order, `cve_patch`, then `cve_minor`, then `cve_major` (skipping steps that do not exist), each verified (section 9) as the starting state plus that one change. The first that passes is accepted and the ladder stops. If none passes, the dependency stays at `current`; a deferral records the reason and re-evaluation trigger (section 8.4) and the report lists the CVEs left open.
+1. A CVE-affected dependency (phase 1) tries its ladder in order, `cve_patch`, then `cve_minor`, then `cve_major` (skipping steps that do not exist, and `cve_major` where major updates are not permitted), each verified (section 9) as the starting state plus that one change. The first that passes is accepted and the ladder stops. If none passes, the dependency stays at `current`; a deferral records the reason and re-evaluation trigger (section 8.4) and the report lists the CVEs left open.
 2. A dependency without a CVE (phase 2, `scope: general`) tries `next_patch`, or `next_minor` when no patch release exists, verified as the starting state plus that one change. The first that passes is accepted; if it fails, the dependency stays at `current`. A dependency already at its newest patch and minor is left alone.
 3. Combine the accepted steps of the phase and verify the combined state. If it passes, it is the phase's result (subject to commit rules, section 5.2). If it fails, the bumps interact: isolate the culprits with group testing as in `latest` step 3 below, move each culprit to its next step (the next ladder level for a CVE-affected dependency; back to `current` for a dependency without a CVE), and re-verify. If no combination passes within budget, keep the passing combination preferred by section 8.5 and report the rest as held back.
 4. Record every attempt (section 15).
@@ -414,7 +417,7 @@ Stop conditions (first that occurs): every dependency in scope has an accepted s
 1. Build and verify the aspirational state (section 9).
 2. If it passes, it becomes the phase's result (subject to commit rules, section 5.2).
 3. If it fails, **isolate culprits** with group testing (delta-debugging style): partition the changed dependencies into groups (related dependencies, e.g. same BOM/family, kept together), test subsets, and narrow to the minimal failing change(s). Use the error signature and API-diff evidence (milestone 5) to propose the culprit first, and fall back to bisection.
-4. **Demote** each culprit to its next candidate (or pin it at current), and re-verify the reduced state. A CVE-affected culprit comes down through `cve_major`, `cve_minor` and `cve_patch` before it is pinned at `current`, which leaves its CVEs open and is reported. Repeat until a state passes or budget is exhausted.
+4. **Demote** each culprit to its next candidate (or pin it at current), and re-verify the reduced state. A CVE-affected culprit comes down through `cve_major` (where permitted), `cve_minor` and `cve_patch` before it is pinned at `current`, which leaves its CVEs open and is reported. Repeat until a state passes or budget is exhausted.
 5. After a state passes, try to **re-promote** demoted dependencies one at a time (or in small groups) to see whether they now pass in combination. Stop when no untried promotion improves the ranking.
 6. Record every attempt (section 15).
 
@@ -450,6 +453,21 @@ Every held-back or pinned dependency is **re-scanned** so a pin never silently l
 ### 8.6 Cooldown and safety
 
 Skip artifact versions newer than `release_cooldown_days` (config). Never build a candidate that adds a new *dependency coordinate* not already in the tree, unless it arrives as a normal transitive of an accepted version, and report such additions.
+
+### 8.7 Major updates
+
+A **major update** changes the first numeric component of a dependency's resolved version (`2.17.1` to `3.0.0`; a calendar version such as `2024.01` to `2025.01` counts). Major updates are the likeliest to need developer code changes, so they are gated by `planning.major_updates` (`--major-updates` overrides it, section 13). Decided 2026-09-25. It is a run-level setting; nothing in a repository's files can loosen it.
+
+| Mode | Behaviour |
+|---|---|
+| `disallowed` (default) | giml never makes a major update. |
+| `allowed` | Major updates are candidates where the strategy's ladder reaches them (`cve_major`, `latest`, section 8.2). |
+| `ml` | A major update of a dependency from one version to another is a candidate only if the ML layer (section 16) predicts, from recorded evidence, that it needs **no developer code changes**, with confidence at or above the abstention threshold. Anything else is treated as `disallowed` for that dependency. |
+
+- **Where the gate applies:** to the candidate's **resolved tree** (section 8.1), compared with the base commit's, so a major change that arrives indirectly, through a parent or BOM upgrade or as a transitive of an accepted version, counts as much as a direct one. It is a filter applied before any build: a blocked candidate costs no build, is recorded (section 15) as `blocked_major_update`, and appears in the report. Forced moves (section 8.2), which use only `next_patch` and `next_minor`, are never major.
+- **Effect on results:** a CVE whose only fix is a major update stays open, and an enforcer violation whose only fix is a major update stays unresolved (section 8.5). Each is reported with its reason and a re-evaluation trigger (a new release fixing it within the current major, a change of `major_updates`, or ML evidence).
+- **`ml` before the ML layer exists:** until a trained scorer is loaded (milestone 8+), or when it has no evidence for the dependency or abstains, `ml` behaves exactly as `disallowed` and the report says "no ML evidence". The default is therefore safe with or without ML.
+- **ML is a prior, never a verdict** (hard rule 8): an allowed major update is still verified by a real build (section 9) like any other candidate. giml edits POM files only (section 8.4), so an accepted major update by construction needs no change to the developer's code for the build and tests to pass.
 
 ---
 
@@ -575,13 +593,14 @@ giml sync [--osv] [--central]               fetch/refresh snapshots (network all
 giml status                                  snapshot ages, state dir, stale worktrees
 giml assess <path> [--declared-tier X]       run gate assessment, print/store result
 giml plan <path> [--strategy S] [--scope S]   full pipeline; leaves result branch + report
+              [--major-updates disallowed|allowed|ml]
               [--max-builds N] [--max-minutes N] [--allow-detached] [--dry-run]
               [--rewind-to <commit>]         start from pom.xml at <commit> (section 5.3)
 giml report <run-id> [--format json|md]      re-render a stored report
 giml clean [--all] [--branches]              remove worktrees (and optionally branches)
 ```
 
-`--strategy` (`conservative`, default, or `latest`) and `--scope` (`cve`, default, or `general`) override `planning.strategy` and `planning.scope` (section 8).
+`--strategy` (`conservative`, default, or `latest`), `--scope` (`cve`, default, or `general`) and `--major-updates` (`disallowed`, default, `allowed` or `ml`) override `planning.strategy`, `planning.scope` and `planning.major_updates` (section 8).
 
 `--dry-run` performs preflight, assessment, and planning without building (lists candidate sets and reasons).
 
@@ -595,13 +614,15 @@ Written to `~/.giml/reports/<run-id>/report.json` and `report.md`, and summarise
 
 Contents:
 - Project, base SHA, branch, worktree path, snapshot ids, config version, tier (declared vs earned).
-- Strategy and scope used (section 8).
+- Strategy, scope and major-update mode used (section 8); the candidates blocked as major updates (section 8.7).
 - Result: changed dependencies (from → to) with reasons; held-back dependencies with reason and re-evaluation trigger; remaining CVEs (with severity, and why unresolved).
 - A **reason line for every upgradable dependency**, touched or not, saying why it was or was not changed. Under `conservative`, for example:
   - "CVE-2025-1234 fixed by patch bump (2.17.1 → 2.17.3)"
   - "CVE-2025-1234 fixed by minor bump (no patch-level fix exists)"
   - "CVE-2025-1234 fixed by minor bump (patch-level fix failed `unit_test`)"
   - "CVE-2025-1234 left open: no fixing version passed (`cve_patch` failed `compile`, `cve_minor` failed `startup`)"
+  - "CVE-2025-1234 left open: the only fix is a major update (2.x to 3.0.1) and `major_updates` is `disallowed`"
+  - "CVE-2025-1234 left open: the only fix is a major update (2.x to 3.0.1); `major_updates` is `ml` and there is no ML evidence"
   - "no CVE, scope is `cve`, left unchanged"
   - "no CVE, patch bump (1.2.3 → 1.2.5) verified and kept"
   - "no CVE, already at its newest patch and minor, left unchanged"
@@ -649,6 +670,8 @@ Layers, in order:
 4. **Abstention**: calibrated confidence; below threshold → "needs human"; report the false-fix rate as a headline metric.
 5. (Optional, later) small encoder fine-tune on CPU. LoRA on large models is out of scope.
 
+**Major-update gate** (section 8.7): under `major_updates: ml`, the scorer of layer 3 also answers, per dependency and version jump, whether the update needs developer code changes, and layer 4 abstains below the confidence threshold. The label comes from real builds and from later human fixes recorded in the dataset (section 15). An abstention means no.
+
 Engine integration: the `RiskScorer` interface with `DeterministicRiskScorer` (default) and `ModelRiskScorer` (a trained model loaded from disk in-process). Swappable by config; the planner works with ML dependencies absent.
 
 ---
@@ -684,7 +707,7 @@ Work in order; stop at each checkpoint.
 
 **M5 — Deterministic planner (est. 2–3 weeks)**
 - Resolution via the dependency plugin's JSON output, candidate generation (section 8.2), lossless POM edits, the default `conservative` search and the `latest` joint search with delta-debugging isolation and re-promotion (section 8.3), the `strategy` and `scope` options, per-dependency reason lines (section 14), deferrals with triggers, japicmp-based candidate filtering, dry-run mode, naive-baseline comparison, result-branch commits, report generation including the rewind comparison (section 5.3).
-- Acceptance: on at least three real projects (including one deliberately behind on dependencies) the plan is produced with evidence; POM diffs of accepted steps touch only versions, `dependencyManagement` pins and, where the project allows them, exclusions (section 8.4); at least one project is run in rewind mode and its report compares giml's result with the base commit's versions; comparison with the naive baseline shows builds, pass rate, CVEs cleared and how few dependencies were touched at all (giml's count against the naive baseline's, since touching only what is needed, rather than bumping everything to latest, is the differentiator to demonstrate); every dependency in the report has a reason line; no CVE is silently left open by a pin; a project whose base commit fails `dependencyConvergence` (arete) ends with a clean enforcer run, or the report says exactly which violations remain and why.
+- Acceptance: on at least three real projects (including one deliberately behind on dependencies) the plan is produced with evidence; with the default `major_updates: disallowed` no dependency in the final resolved tree has a different major version from the base commit, and a run with `allowed` on a project that has a major-only CVE fix attempts it; POM diffs of accepted steps touch only versions, `dependencyManagement` pins and, where the project allows them, exclusions (section 8.4); at least one project is run in rewind mode and its report compares giml's result with the base commit's versions; comparison with the naive baseline shows builds, pass rate, CVEs cleared and how few dependencies were touched at all (giml's count against the naive baseline's, since touching only what is needed, rather than bumping everything to latest, is the differentiator to demonstrate); every dependency in the report has a reason line; no CVE is silently left open by a pin; a project whose base commit fails `dependencyConvergence` (arete) ends with a clean enforcer run, or the report says exactly which violations remain and why.
 
 **M6 — Startup verification (est. 1–2 weeks)**
 - Settings loader/validator (section 12.1), smoke runner (12.2), PostgreSQL lifecycle (12.3), baseline handling, integration into the pipeline and tier evaluation.

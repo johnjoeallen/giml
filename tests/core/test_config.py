@@ -34,6 +34,7 @@ def test_default_config_loads_as_specified():
     )  # fmt: skip
     assert config.shared.flake_check_runs == 5
     assert (config.planning.strategy, config.planning.scope) == ("conservative", "cve")
+    assert config.planning.major_updates == "disallowed"
     assert config.planning.release_cooldown_days == 7
     assert config.warnings == ()
 
@@ -82,6 +83,8 @@ def test_missing_key_is_rejected():
         (("planning",), "strategy", True, "one of conservative, latest"),
         (("planning",), "scope", "all", "one of cve, general"),
         (("planning",), "scope", None, "one of cve, general"),
+        (("planning",), "major_updates", "always", "one of disallowed, allowed, ml"),
+        (("planning",), "major_updates", False, "one of disallowed, allowed, ml"),
     ],
 )
 def test_invalid_values_are_rejected(section, key, value, message):
@@ -329,7 +332,14 @@ def test_planning_accepts_every_strategy_and_scope_combination():
             assert (parse(data).planning.strategy, parse(data).planning.scope) == (strategy, scope)
 
 
-@pytest.mark.parametrize("key", ["strategy", "scope"])
+@pytest.mark.parametrize("mode", ["disallowed", "allowed", "ml"])
+def test_planning_accepts_every_major_update_mode(mode):
+    data = default_data()
+    data["planning"]["major_updates"] = mode
+    assert parse(data).planning.major_updates == mode
+
+
+@pytest.mark.parametrize("key", ["strategy", "scope", "major_updates"])
 def test_planning_strategy_and_scope_are_required(key):
     data = default_data()
     del data["planning"][key]

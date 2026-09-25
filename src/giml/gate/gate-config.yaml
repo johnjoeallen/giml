@@ -34,3 +34,4 @@ planning:
   max_wall_minutes: 120
   strategy: conservative          # how far versions move: conservative (patch, then minor) or latest; spec section 8
   scope: cve                      # what may move: cve (only CVE-affected dependencies) or general (CVE first, then the rest)
+  major_updates: disallowed       # disallowed | allowed | ml (only with ML evidence that no code change is needed); spec 8.7

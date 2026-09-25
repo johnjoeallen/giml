@@ -21,6 +21,7 @@ INTEGRATION_TEST_MODES = ("when_present", "off")
 STARTUP_CHECK_MODES = ("when_configured", "off")
 PLANNING_STRATEGIES = ("conservative", "latest")  # how far and how fast versions move (spec 8.2, 8.3)
 PLANNING_SCOPES = ("cve", "general")  # which dependencies may move: CVE-affected only, or all (CVE first)
+MAJOR_UPDATE_MODES = ("disallowed", "allowed", "ml")  # spec 8.7; "ml" needs ML evidence, so it is "disallowed" until M8
 
 
 class ConfigError(ValueError):
@@ -62,6 +63,7 @@ class PlanningSettings:
     max_wall_minutes: int
     strategy: str
     scope: str
+    major_updates: str
 
 
 @dataclass(frozen=True)
@@ -212,6 +214,7 @@ def parse_gate_config(text: str) -> GateConfig:
         max_wall_minutes=planning_section.int("max_wall_minutes", minimum=1),
         strategy=planning_section.choice("strategy", PLANNING_STRATEGIES),
         scope=planning_section.choice("scope", PLANNING_SCOPES),
+        major_updates=planning_section.choice("major_updates", MAJOR_UPDATE_MODES),
     )
     planning_section.finish()
     root.finish()
