@@ -25,9 +25,10 @@ These are enforced by code and tests, not just convention:
 
 ## Current status
 
-- Milestone: **M4 (build runner, cache, outcome logging) complete, awaiting review** (2026-09-25). Run isolation, failure classes and signatures, the stage cache, structured enforcer violations, baseline verification (including the rewound baseline) and outcome logging with JSONL export are done; M5a (the no-build analysis, `plan --dry-run`) was done before it. Next: the rest of M5, the deterministic planner (joint search and isolation, lossless POM edits in result-branch commits, per-dependency reason lines, deferrals, japicmp filtering, naive-baseline comparison, rewind comparison).
+- Milestone: **M5 checkpoint A (conservative planner) complete, awaiting review** (2026-09-25). `giml plan` now analyses, searches the ladders (build budget, ddmin isolation, deferrals), commits one step per accepted change, measures the final enforcer state and writes `plan.{json,md}` with the naive-baseline comparison. Scope `cve` and `general` work; `--strategy latest` (joint search, re-promotion) and japicmp filtering are checkpoint B. Not built: forced moves and enforcer pins, rewind comparison, reference-violation update between phases.
 - M1 accepted 2026-09-24. M2 checkpoint recorded (dff9705). M3 accepted 2026-09-25 (survey: redkite Tier A at 970df7f, grip and arete no tier yet).
-- Self-gate at M4: Tier B PASS (line 99.25%, branch 96.79%, test strength 90.04%, mutation coverage 89.99%, excluded share 1.96%, 0 flaky of 5 runs). 1,105 fast tests and 7 slow tests (real Maven and JVM) pass.
+- Self-gate at M5a: Tier B PASS (line 99.09%, branch 96.29%, test strength 88.08%, mutation coverage 88.04%, excluded share 1.76%, 0 flaky of 5 runs). 1,194 fast tests pass.
+- M5 evidence (scratch clone of redkite with h2 and thymeleaf downgraded, Tier A): `giml plan` committed thymeleaf 3.0.11 to 3.1.5 and h2 2.1.214 to 2.2.220, 3 builds, exposure CRITICAL (4 advisories) to none, enforcer clean, exit 0 (4m49s); a repeat with `--scope general` took 0 builds (all cached). Rewind on redkite failed at both points tried (old module layout; old POMs do not compile), so rewind acceptance is still open. grip earned no tier, so it stays report-only.
 - M4 evidence on real projects (2026-09-25, scratch clones): `giml plan` verified the baseline of redkite and grip (build, unit tests and enforcer pass) and of arete (build and unit tests pass; the enforcer fails with 9 convergence violations that become the reference set); a repeat on arete took 0.33 s instead of 22.6 s, all three stages cache hits. Open gaps: `--rewind-to` with `--dry-run`, parent updates as general updates, the stages integration test and startup check (M6), `knowledge_transition` and `deferral` (M5).
 - Update this line and the log below at each checkpoint.
 
@@ -44,7 +45,8 @@ Record here only commands that have actually been run successfully. Verified wit
 - Assess (M3): `.venv/bin/giml --state-dir <dir> [--config <global.yml>] assess <project> [--declared-tier B]`. Runs Maven, JaCoCo and PIT; a real project takes minutes.
 - Survey (M3): `.venv/bin/python scripts/survey.py --state-dir <dir> [--config <global.yml>] <clone> [<clone> ...]` on scratch clones; writes `<dir>/reports/survey-<UTC>.md`.
 - Dry-run analysis (M5a): `.venv/bin/giml --state-dir <dir> sync --osv`, then `.venv/bin/giml --state-dir <dir> plan --dry-run <project> [--strategy conservative|latest] [--scope cve|general] [--major-updates disallowed|allowed|ml]`. Builds nothing (Maven only resolves trees, seconds). The report names the coordinates that need `giml sync --central --coordinate ...`; run that and plan again. Reports land in `<dir>/reports/<run-id>/report.{json,md}`. Without a valid assessment (`giml assess`) it lists findings only and proposes nothing.
-- Baseline (M4): `.venv/bin/giml --state-dir <dir> plan <project> [--rewind-to <commit>]` applies giml's tooling in a worktree and verifies compile, unit_test and enforcer through the stage cache, then stops (planning is M5). Repeat it to see cache hits. Exit 5 when the build or unit tests fail at the base (or at the rewind point), exit 4 for infrastructure failures. Report: `<dir>/reports/<run-id>/baseline.json`.
+- Plan (M5): `.venv/bin/giml --state-dir <dir> plan <project> [--scope cve|general] [--major-updates ...] [--rewind-to <commit>]` applies giml's tooling in a worktree, verifies the baseline (compile, unit_test, enforcer) through the stage cache, then plans; needs a usable assessment, an OSV snapshot and Central metadata. Exit 0 = a step committed and the enforcer clean, 1 = no improvement or violations remain. Report: `<dir>/reports/<run-id>/plan.{json,md}`. Assessing a project takes minutes to tens of minutes.
+- Baseline (M4): the same command;  Repeat it to see cache hits. Exit 5 when the build or unit tests fail at the base (or at the rewind point), exit 4 for infrastructure failures. Report: `<dir>/reports/<run-id>/baseline.json`.
 - Real sync into a throwaway state dir: `.venv/bin/giml --state-dir <dir> sync --coordinate com.fasterxml.jackson.core:jackson-databind` then `.venv/bin/giml --state-dir <dir> status` (about 6 s; OSV zip about 10 MB)
 
 ## Layout
@@ -54,7 +56,7 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 - Deviation: the default gate config lives in the package, `src/giml/gate/gate-config.yaml` (not `config/`), so an installed giml can find it; `giml.core.config.default_gate_config_path()`. GiML-pinned tool versions are in `src/giml/gate/tooling.yaml`.
 - `scripts/selfgate.py` is giml's own quality gate (not part of the package).
 - Snapshots live in `<state>/snapshots/<source>/<UTC-ts>-<hash12>/` with `manifest.json`. OSV has a derived `index.sqlite`; Central stores only its raw `central.json` (small enough to load whole, so no index).
-- State DB: `<state>/state.db`; migrations 0001 (`snapshot`), 0002 (`project`, `run`), 0003 (`gate_result`, run kind) and 0004 (`candidate_state`, `build_attempt`, `example`). `deferral` and `knowledge_transition` arrive with the planner (M5).
+- State DB: `<state>/state.db`; migrations 0001 (`snapshot`), 0002 (`project`, `run`), 0003 (`gate_result`, run kind) and 0004 (`candidate_state`, `build_attempt`, `example`). 0005 (`deferral`). `knowledge_transition` arrives later in M5.
 - `src/giml/git/` holds the git wrapper, preflight, lock, worktrees and rewind; `src/giml/workspace.py` orchestrates `plan` (M2 stub), `clean` and crashed-run detection. `src/giml/maven/project.py` discovers the reactor (root pom plus modules, including profile modules).
 - `src/giml/gate/` holds tooling setup, report collectors, tiers and `assess`; `src/giml/maven/runner.py` runs Maven; `src/giml/maven/jdk.py` chooses the JDK (spec §3.1). `scripts/survey.py` tabulates assessments across projects.
 - Deviation: planner code lives in `src/giml/plan/` (exposure now; candidates, analysis and report next), not `core/`, so it can import `maven/` and `data/` without a cycle through `core/`.
@@ -107,6 +109,8 @@ Newest first. One line each: date, decision, reason.
 
 ## Gotchas
 
+- A pgrep-based wait loop matches its own command line and never ends; wait on a PID (`kill -0`) or an output file instead. Cloning redkite needs `GIT_LFS_SKIP_SMUDGE=1` when the LFS objects are not on the remote.
+- Trial and commit both rebase text spans: each step's commit is rebuilt from the original files with the steps so far applied together (`plan/execute.py`), never by applying steps one after another.
 Project-specific traps discovered while working (tool quirks, platform differences, flaky areas). One line each.
 
 - Git worktrees share the repository config, so the developer's `user.name`/`user.email` apply to giml's commits without passing them through the environment (the wrapper scrubs `GIT_*` anyway).

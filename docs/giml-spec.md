@@ -776,3 +776,6 @@ Work in order; stop at each checkpoint.
 9. Which local PostgreSQL setup (install or container) and role provisioning. (M6)
 10. ~~Source of per-version release dates.~~ Answered 2026-09-24: `Last-Modified` of each version's `.pom` (search API index found stale); see section 7.2.
 11. ~~CVSS scoring.~~ Answered 2026-09-24: in-house CVSS v3.x calculator, OSV/GHSA label fallback, score source recorded; see section 7.1.
+
+
+**As implemented in M5 checkpoint A** (`plan/steps.py`, `execute.py`, `planner.py`): parent/BOM ladders run first, the tree is analysed again after a commit, then the dependency ladders (CVE first, then one-step general updates under `scope: general`). Trials run at the result tip; one commit per accepted step, staging only edited POMs; unmoved dependencies are `deferral` rows with reasons and triggers (`new_release`, `new_advisory`, `pom_change`). The report includes the naive baseline (every ladder's first step in one build). The reference violation set is not yet refreshed between phases (a later phase tolerates violations an earlier commit resolved).
