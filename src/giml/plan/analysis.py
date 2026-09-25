@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import itertools
 import json
 import os
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +35,8 @@ from giml.maven.runner import MavenRunner, run_maven
 from giml.maven.tree import ResolutionError, resolve_reactor
 from giml.maven.version import ComparableVersion
 from giml.plan.candidates import is_prerelease, plan_dependency
-from giml.plan.exposure import resolve_exposure
+from giml.plan.exposure import TreeExposure, resolve_exposure
+from giml.plan.parents import ChangeUnit, UnitPlan, change_units, not_evaluated, plan_change_unit, with_version
 from giml.plan.report import ReportInputs, TierStatus, build_report, render_markdown
 
 STOP_DRY_RUN = "dry_run"
@@ -94,6 +97,20 @@ def _snapshot_warnings(snapshots: Mapping[str, SnapshotInfo | None], limit: int,
             and now - info.fetched_at > datetime.timedelta(days=limit)]  # fmt: skip
 
 
+def _plan_units(units: list[ChangeUnit], releases, exposure: TreeExposure, tier: TierStatus, options: PlanningSettings,
+                now: datetime.datetime, resolve_with: Callable[[ChangeUnit, str], TreeExposure]) -> list[UnitPlan]:  # fmt: skip
+    """Parent and BOM change units, evaluated by resolution unless the tier forbids proposals."""
+    plans = []
+    for unit in units:
+        if not tier.usable:
+            plans.append(not_evaluated(unit, exposure.exposure, "report only: no usable tier"))
+            continue
+        available = releases.versions(unit.coordinate) if releases else None
+        plans.append(plan_change_unit(unit, available, exposure, lambda version, unit=unit: resolve_with(unit, version),
+                                      options, now))  # fmt: skip
+    return plans
+
+
 def dry_run(
     path: Path,
     state_dir: Path,
@@ -141,14 +158,25 @@ def dry_run(
                 available = {d.coordinate: releases.versions(d.coordinate) if releases else None for d in exposure.dependencies}
                 plans = [plan_dependency(d, declarations.for_coordinate(d.coordinate), available[d.coordinate], advisories,
                                          options, now) for d in exposure.dependencies]  # fmt: skip
+                tier = tier_status(store.latest_gate_result(repo.project_key), config, now, repo.base_sha)
+                logs, steps = state_dir / "runs" / run_id / "logs", itertools.count(2)
+
+                def resolve_with(unit: ChangeUnit, version: str) -> TreeExposure:
+                    name = re.sub(r"[^\w.\-]", "_", f"{next(steps):02d}-{unit.kind}-{unit.coordinate.artifact_id}-{version}")
+                    with with_version(unit.site, version, expected=unit.version):
+                        candidate = resolve_reactor(project_dir, worktree_poms, logs / f"{name}.log", timeout, maven,
+                                                    jdk.build_env(env))  # fmt: skip
+                    return resolve_exposure(candidate, advisories)
+
+                unit_plans = _plan_units(change_units(declarations), releases, exposure, tier, options, now, resolve_with)
             report = build_report(ReportInputs(
                 project=repo.project_dir.name, base_sha=repo.base_sha, run_id=run_id, worktree=worktree, generated_at=now,
                 config_version=config.version, options=options,
-                tier=tier_status(store.latest_gate_result(repo.project_key), config, now, repo.base_sha),
+                tier=tier,
                 snapshots={"osv": osv_snapshot.id, "central": central_snapshot.id if central_snapshot else None},
                 jdk=jdk.record(), exposure=exposure, plans=plans,
                 latest_available={c: newest_release(v) for c, v in available.items()},
-                parents=declarations.parents, skipped=declarations.skipped,
+                parents=declarations.parents, skipped=declarations.skipped, units=unit_plans,
                 warnings=_snapshot_warnings({"osv": osv_snapshot, "central": central_snapshot}, options.max_snapshot_age_days, now),
             ))  # fmt: skip
             stop = STOP_DRY_RUN

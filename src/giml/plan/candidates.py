@@ -53,6 +53,11 @@ def level(current: str, candidate: str) -> str:
     return "minor" if second[0] != second[1] else "patch"
 
 
+def major_of(version: str) -> str:
+    match = re.match(r"\d+", version)
+    return match.group() if match else version
+
+
 def is_prerelease(version: str) -> bool:
     """Below its own numeric release in Maven ordering (1.0-rc1, 2.0-M1, 1.0-SNAPSHOT)."""
     match = _NUMERIC_PREFIX.match(version)
@@ -94,6 +99,29 @@ def _change(declarations: Sequence[Declaration]) -> tuple[str, tuple[Site, ...]]
     return UNSUPPORTED, ()
 
 
+def eligible_versions(current: str, releases: Sequence[VersionRelease], cooldown_days: int,
+                      now: datetime.datetime) -> tuple[list[str], dict[str, datetime.datetime | None], list[str]]:  # fmt: skip
+    """The versions newer than ``current`` a build may try, oldest first (spec 8.2 and 8.6).
+
+    Prereleases are skipped unless the current version is one. Versions younger than the cooldown are
+    skipped too and returned separately, so the report can name them. Also returns the release dates.
+    """
+    cooldown = datetime.timedelta(days=cooldown_days)
+    current_key, current_pre = ComparableVersion(current), is_prerelease(current)
+    pool: list[str] = []
+    released: dict[str, datetime.datetime | None] = {}
+    held: list[str] = []
+    for release in sorted(releases, key=lambda r: (ComparableVersion(r.version), r.version)):
+        if ComparableVersion(release.version) <= current_key or (is_prerelease(release.version) and not current_pre):
+            continue
+        if release.released_at is not None and now - release.released_at < cooldown:
+            held.append(release.version)
+            continue
+        pool.append(release.version)
+        released[release.version] = release.released_at
+    return pool, released, held
+
+
 class _Ladder:
     """The versions newer than the current one that a build may try, oldest first."""
 
@@ -102,19 +130,7 @@ class _Ladder:
         self.current, self.advisories, self.options = dependency.version, advisories, options
         self.coordinate = dependency.coordinate
         self.current_ids = frozenset(f.advisory_id for f in dependency.findings)
-        self.released: dict[str, datetime.datetime | None] = {}
-        self.held: list[str] = []
-        cooldown = datetime.timedelta(days=options.release_cooldown_days)
-        current_key, current_pre = ComparableVersion(self.current), is_prerelease(self.current)
-        self.pool: list[str] = []
-        for release in sorted(releases, key=lambda r: (ComparableVersion(r.version), r.version)):
-            if ComparableVersion(release.version) <= current_key or (is_prerelease(release.version) and not current_pre):
-                continue
-            if release.released_at is not None and now - release.released_at < cooldown:
-                self.held.append(release.version)
-                continue
-            self.pool.append(release.version)
-            self.released[release.version] = release.released_at
+        self.pool, self.released, self.held = eligible_versions(self.current, releases, options.release_cooldown_days, now)
         self._found: dict[str, tuple[frozenset[str], frozenset[str]]] = {}
 
     def advisories_of(self, version: str) -> tuple[frozenset[str], frozenset[str]]:

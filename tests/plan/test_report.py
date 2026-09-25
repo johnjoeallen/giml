@@ -274,3 +274,130 @@ def test_summary_text_without_findings_or_a_tier():
         "dry run: proj at abc1234 (tier none, report only; strategy conservative, scope cve, major updates disallowed)",
         "exposure: none; 1 dependencies, 0 CVE-affected",
     ]
+
+
+# parent and BOM change units ---------------------------------------------------------------------------------------
+
+from giml.maven.declarations import Site as _Site  # noqa: E402
+from giml.plan.exposure import Exposure  # noqa: E402
+from giml.plan.parents import ChangeUnit, Evaluation, Pick, UnitPlan  # noqa: E402
+
+PARENT = c("org.boot:starter-parent")
+
+
+def evaluation(version, level="patch", total=0, worst=SeverityRating.HIGH, cleared=(), introduced=(), changed=1, blocked=None,
+               failed=None):  # fmt: skip
+    exposure = None if failed else Exposure(worst if total else None, 1 if total else 0, total)
+    return Evaluation(version, level, NOW, exposure, tuple(cleared), tuple(introduced), changed, blocked, failed)
+
+
+def unit_plan(status, picks=(), evaluations=(), current=None, kind="parent", version="3.3.5", **kw):
+    site = _Site(ROOT / "pom.xml", 10, (1, 2), "version")
+    defaults = {"held_by_cooldown": (), "truncated": False, "skipped_majors": 0, "note": ""}
+    return UnitPlan(ChangeUnit(kind, PARENT, version, site), status, current or Exposure(SeverityRating.HIGH, 2, 5),
+                    tuple(evaluations), tuple(Pick(k, v) for k, v in picks), **{**defaults, **kw})  # fmt: skip
+
+
+def with_units(units, options=None, tier_status=None):
+    dep = resolved("o:m", "1")
+    base = inputs([dep], [plan(dep, "up_to_date")], options=options, tier_status=tier_status)
+    return build_report(ReportInputs(**{**base.__dict__, "units": tuple(units)}))
+
+
+def unit_reason(report):
+    return report["change_units"][0]["reason"]
+
+
+def test_parent_bump_reason_and_evidence():
+    ok = evaluation("3.3.7", total=1, worst=SeverityRating.MEDIUM, cleared=["A", "B", "C", "D"], changed=7)
+    p = unit_plan("improves", [("parent_patch", "3.3.7")], [evaluation("3.3.6", total=5, worst=SeverityRating.HIGH), ok])
+    report = with_units([p])
+    assert unit_reason(report) == ("a patch bump (3.3.5 → 3.3.7) clears 4 of 5 advisories and leaves 1 (worst MEDIUM); "
+                                   "a candidate, not built (dry run)")  # fmt: skip
+    unit = report["change_units"][0]
+    assert (unit["kind"], unit["coordinate"], unit["version"], unit["status"]) == ("parent", "org.boot:starter-parent", "3.3.5", "improves")
+    assert (unit["file"], unit["line"], unit["picks"]) == ("pom.xml", 10, [{"kind": "parent_patch", "version": "3.3.7"}])
+    assert unit["current_exposure"] == {"max_severity": "HIGH", "at_max": 2, "total": 5}
+    assert unit["evaluations"][1] == {"version": "3.3.7", "level": "patch", "released_at": NOW.isoformat(),
+                                      "exposure": {"max_severity": "MEDIUM", "at_max": 1, "total": 1},
+                                      "cleared": ["A", "B", "C", "D"], "introduced": [], "changed_dependencies": 7,
+                                      "blocked": None, "failed": None}  # fmt: skip
+
+
+def test_a_bump_that_clears_everything_says_so():
+    p = unit_plan("improves", [("parent_minor", "3.4.1")], [evaluation("3.4.1", "minor", total=0, cleared=list("ABCDE"))])
+    assert unit_reason(with_units([p])) == "a minor bump (3.3.5 → 3.4.1) clears 5 of 5 advisories, leaving none; a candidate, not built (dry run)"
+
+
+def test_latest_strategy_reason_has_an_aim_and_a_floor():
+    evals = [evaluation("3.4.1", "minor", cleared=list("ABCDE")), evaluation("3.5.0", "minor", cleared=list("ABCDE"))]
+    p = unit_plan("improves", [("parent_latest", "3.5.0"), ("parent_minor", "3.4.1")], evals)
+    assert unit_reason(with_units([p])) == ("aim for 3.5.0 (clears 5 of 5), demoting to 3.4.1 (clears 5 of 5) if it fails; "
+                                            "a candidate, not built (dry run)")  # fmt: skip
+
+
+def test_no_improvement_reason_mentions_skipped_majors_and_truncation():
+    p = unit_plan("no_improvement")
+    assert unit_reason(with_units([p])) == "no newer version improves exposure (5 advisories stay open)"
+    p = unit_plan("no_improvement", skipped_majors=2, truncated=True)
+    assert unit_reason(with_units([p])) == (
+        "no newer version improves exposure (5 advisories stay open); 2 newer major version(s) were not evaluated because "
+        "`major_updates` is `disallowed`; only the nearest versions were evaluated")  # fmt: skip
+    allowed = PlanningSettings(7, 60, 120, "conservative", "cve", "allowed", 7)
+    assert "not evaluated" not in unit_reason(with_units([unit_plan("no_improvement", skipped_majors=0)], options=allowed))
+
+
+def test_blocked_major_metadata_failed_and_not_evaluated_reasons():
+    blocked = evaluation("3.3.6", total=0, cleared=list("ABCDE"), blocked="major update: changes o:lib from 2.x to 3.x; major_updates is disallowed")
+    assert unit_reason(with_units([unit_plan("blocked_major", evaluations=[blocked])])) == (
+        "the only improvement is blocked: major update: changes o:lib from 2.x to 3.x; major_updates is disallowed")
+    assert unit_reason(with_units([unit_plan("no_metadata")])) == (
+        "no Central metadata for org.boot:starter-parent; run `giml sync --central --coordinate org.boot:starter-parent`")
+    assert unit_reason(with_units([unit_plan("not_evaluated", note="no CVE to fix")])) == "not evaluated: no CVE to fix"
+
+
+def test_unit_data_keeps_cooldown_truncation_skipped_and_failures():
+    p = unit_plan("no_improvement", evaluations=[evaluation("3.3.6", failed="dependency resolution failed for 3.3.6")],
+                  held_by_cooldown=("3.3.7",), truncated=True, skipped_majors=1, kind="bom")  # fmt: skip
+    unit = with_units([p])["change_units"][0]
+    assert (unit["kind"], unit["held_by_cooldown"], unit["truncated"], unit["skipped_majors"]) == ("bom", ["3.3.7"], True, 1)
+    assert unit["evaluations"][0]["exposure"] is None and unit["evaluations"][0]["failed"].startswith("dependency resolution failed")
+
+
+def test_units_without_metadata_join_the_sync_command():
+    dep = resolved("o:l", "1", [finding("A", "o:l", "1")])
+    base = inputs([dep], [plan(dep, "no_metadata")])
+    report = build_report(ReportInputs(**{**base.__dict__, "units": (unit_plan("no_metadata"),)}))
+    assert report["missing_metadata"] == ["o:l", "org.boot:starter-parent"]
+    assert report["sync_command"] == "giml sync --central --coordinate o:l --coordinate org.boot:starter-parent"
+
+
+def test_a_report_without_units_has_an_empty_list():
+    assert with_units([])["change_units"] == []
+
+
+def test_markdown_lists_the_parent_evaluations():
+    ok = evaluation("3.3.7", total=1, worst=SeverityRating.MEDIUM, cleared=["A", "B", "C", "D"], changed=7, introduced=["N"])
+    bad = evaluation("3.3.8", failed="dependency resolution failed for 3.3.8")
+    text = render_markdown(with_units([unit_plan("improves", [("parent_patch", "3.3.7")], [ok, bad], skipped_majors=1)]))
+    for line in ("## Parent and BOM upgrades", "### parent org.boot:starter-parent 3.3.5",
+                 "a patch bump (3.3.5 → 3.3.7) clears 4 of 5 advisories", "| version | level | worst | advisories | cleared | new | changed |",
+                 "| 3.3.7 | patch | MEDIUM | 1 | 4 | 1 | 7 |", "| 3.3.8 | patch | resolution failed | | | | |",
+                 "Declared in: pom.xml:10", "Suggested: parent_patch 3.3.7"):
+        assert line in text, line
+    assert "## Parent and BOM upgrades" not in render_markdown(with_units([]))
+
+
+def test_summary_lists_units_after_the_dependencies():
+    dep = resolved("o:l", "1", [finding("A", "o:l", "1")])
+    base = inputs([dep], [plan(dep, "no_fix")])
+    p = unit_plan("improves", [("parent_patch", "3.3.7")], [evaluation("3.3.7", cleared=["A"])])
+    text = render_summary(build_report(ReportInputs(**{**base.__dict__, "units": (p,)})))
+    assert text.splitlines()[-1] == ("  parent org.boot:starter-parent 3.3.5: a patch bump (3.3.5 → 3.3.7) clears 1 of 5 advisories, "
+                                     "leaving none; a candidate, not built (dry run)")  # fmt: skip
+
+
+def test_units_are_not_evaluated_in_a_report_only_run():
+    p = unit_plan("not_evaluated", note="report only: no usable tier")
+    report = with_units([p], tier_status=tier(usable=False, earned=None))
+    assert unit_reason(report) == "not evaluated: report only: no usable tier"

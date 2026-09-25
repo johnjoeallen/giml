@@ -8,7 +8,6 @@ verified steps.
 from __future__ import annotations
 
 import datetime
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,8 +16,9 @@ from giml.core.config import PlanningSettings
 from giml.core.model import Coordinate, Finding
 from giml.maven.declarations import ExternalParent, Site
 from giml.maven.version import ComparableVersion
-from giml.plan.candidates import Candidate, DependencyPlan
-from giml.plan.exposure import ResolvedDependency, TreeExposure
+from giml.plan.candidates import Candidate, DependencyPlan, major_of
+from giml.plan.exposure import Exposure, ResolvedDependency, TreeExposure
+from giml.plan.parents import UnitPlan
 
 _DRY_RUN = "a candidate, not built (dry run)"
 _REPORT_ONLY = "report only: no usable tier, so nothing is proposed"
@@ -56,6 +56,7 @@ class ReportInputs:
     parents: Sequence[ExternalParent]
     skipped: Sequence[str]
     warnings: Sequence[str]  # for example a stale snapshot
+    units: Sequence[UnitPlan] = ()  # parent and BOM change units (spec 8.2)
 
 
 def _relative(path: Path, root: Path) -> str:
@@ -101,11 +102,6 @@ def _aim(prefix: str, candidates: Sequence[Candidate]) -> str:
     return text
 
 
-def _major_of(version: str) -> str:
-    match = re.match(r"\d+", version)
-    return match.group() if match else version
-
-
 def _cve_reason(plan: DependencyPlan, findings: Sequence[Finding], options: PlanningSettings) -> str:
     labels = _labels(findings)
     if plan.status == "fix_available":
@@ -117,7 +113,7 @@ def _cve_reason(plan: DependencyPlan, findings: Sequence[Finding], options: Plan
         return f"{labels} fixed by {_bump(kind, plan.version, first, plan.candidates)}; {_DRY_RUN}"
     if plan.status == "fix_blocked_major":
         version = min((c.version for c in plan.candidates if c.clears), key=ComparableVersion)
-        update = f"a major update ({_major_of(plan.version)}.x to {version})"
+        update = f"a major update ({major_of(plan.version)}.x to {version})"
         if options.major_updates == "ml":
             return f"{labels} left open: the only fix is {update}; `major_updates` is `ml` and there is no ML evidence"
         return f"{labels} left open: the only fix is {update} and `major_updates` is `{options.major_updates}`"
@@ -179,6 +175,61 @@ def _entry(inputs: ReportInputs, dependency: ResolvedDependency, plan: Dependenc
             "held_by_cooldown": list(plan.held_by_cooldown), "latest_available": newest}  # fmt: skip
 
 
+def _exposure(exposure: Exposure) -> dict:
+    return {"max_severity": exposure.max_severity.name if exposure.max_severity else None,
+            "at_max": exposure.at_max, "total": exposure.total}  # fmt: skip
+
+
+def _evaluation(unit: UnitPlan, version: str):
+    return next(e for e in unit.evaluations if e.version == version)
+
+
+def _clears(unit: UnitPlan, version: str) -> str:
+    return f"clears {len(_evaluation(unit, version).cleared)} of {unit.current.total}"
+
+
+def _leaves(unit: UnitPlan, version: str) -> str:
+    left = _evaluation(unit, version).exposure
+    return f" and leaves {left.total} (worst {left.max_severity.name})" if left.total else ", leaving none"
+
+
+def _unit_reason(unit: UnitPlan, options: PlanningSettings) -> str:
+    coordinate = unit.unit.coordinate
+    if unit.status == "improves":
+        aim, floor = unit.picks[0], unit.picks[-1]
+        if aim is not floor:
+            return (f"aim for {aim.version} ({_clears(unit, aim.version)}), demoting to "
+                    f"{floor.version} ({_clears(unit, floor.version)}) if it fails; {_DRY_RUN}")  # fmt: skip
+        level = _evaluation(unit, floor.version).level
+        return (f"a {level} bump ({unit.unit.version} → {floor.version}) {_clears(unit, floor.version)} advisories"
+                f"{_leaves(unit, floor.version)}; {_DRY_RUN}")  # fmt: skip
+    if unit.status == "blocked_major":
+        return f"the only improvement is blocked: {next(e.blocked for e in unit.evaluations if e.blocked)}"
+    if unit.status == "no_metadata":
+        return f"no Central metadata for {coordinate}; run `giml sync --central --coordinate {coordinate}`"
+    if unit.status == "not_evaluated":
+        return f"not evaluated: {unit.note}"
+    text = f"no newer version improves exposure ({unit.current.total} advisories stay open)"
+    if unit.skipped_majors:
+        text += (f"; {unit.skipped_majors} newer major version(s) were not evaluated because "
+                 f"`major_updates` is `{options.major_updates}`")  # fmt: skip
+    return text + ("; only the nearest versions were evaluated" if unit.truncated else "")
+
+
+def _unit_entry(unit: UnitPlan, root: Path, options: PlanningSettings) -> dict:
+    return {"kind": unit.unit.kind, "coordinate": str(unit.unit.coordinate), "version": unit.unit.version,
+            "file": _relative(unit.unit.site.pom, root), "line": unit.unit.site.line, "status": unit.status,
+            "reason": _unit_reason(unit, options), "current_exposure": _exposure(unit.current),
+            "picks": [{"kind": p.kind, "version": p.version} for p in unit.picks],
+            "evaluations": [{"version": e.version, "level": e.level,
+                             "released_at": e.released_at.isoformat() if e.released_at else None,
+                             "exposure": _exposure(e.exposure) if e.exposure else None, "cleared": list(e.cleared),
+                             "introduced": list(e.introduced), "changed_dependencies": e.changed,
+                             "blocked": e.blocked, "failed": e.failed} for e in unit.evaluations],  # fmt: skip
+            "held_by_cooldown": list(unit.held_by_cooldown), "truncated": unit.truncated,
+            "skipped_majors": unit.skipped_majors, "note": unit.note}  # fmt: skip
+
+
 def _worst_first(dependency: ResolvedDependency) -> tuple:
     rating = max((int(f.severity.rating) for f in dependency.findings), default=-1)
     return (-rating, str(dependency.coordinate), dependency.version)
@@ -190,7 +241,9 @@ def build_report(inputs: ReportInputs) -> dict:
     dependencies = sorted(inputs.exposure.dependencies, key=_worst_first)
     entries = [_entry(inputs, d, plans[(d.coordinate, d.version)]) for d in dependencies]
     statuses = [e["status"] for e in entries]
-    missing = sorted({e["coordinate"] for e in entries if e["status"] == "no_metadata"})
+    unit_entries = [_unit_entry(u, inputs.worktree, inputs.options) for u in inputs.units]
+    missing = sorted({e["coordinate"] for e in entries if e["status"] == "no_metadata"}
+                     | {u["coordinate"] for u in unit_entries if u["status"] == "no_metadata"})  # fmt: skip
     exposure = inputs.exposure.exposure
     return {
         "kind": "dry_run", "project": inputs.project, "base_sha": inputs.base_sha, "run_id": inputs.run_id,
@@ -207,7 +260,7 @@ def build_report(inputs: ReportInputs) -> dict:
         "summary": {"dependencies": len(entries), "direct": sum(e["direct"] for e in entries),
                     "cve_affected": sum(e["cve_affected"] for e in entries),
                     **{status: statuses.count(status) for status in _DEFAULT_STATUSES}},  # fmt: skip
-        "dependencies": entries, "missing_metadata": missing,
+        "dependencies": entries, "change_units": unit_entries, "missing_metadata": missing,
         "sync_command": "giml sync --central " + " ".join(f"--coordinate {c}" for c in missing) if missing else None,
         "external_parents": [{"coordinate": str(p.coordinate), "version": p.version,
                               "file": _relative(p.pom, inputs.worktree), "line": p.site.line} for p in inputs.parents],  # fmt: skip
@@ -254,6 +307,7 @@ def render_summary(report: dict) -> str:
              f"scope {planning['scope']}, major updates {planning['major_updates']})",
              f"exposure: {worst}; {summary['dependencies']} dependencies, {summary['cve_affected']} CVE-affected"]  # fmt: skip
     lines += [f"  {e['coordinate']} {e['version']}: {e['reason']}" for e in report["dependencies"] if e["cve_affected"]]
+    lines += [f"  {u['kind']} {u['coordinate']} {u['version']}: {u['reason']}" for u in report["change_units"]]
     if report["missing_metadata"]:
         lines += [f"missing Central metadata for {len(report['missing_metadata'])} coordinate(s); run: {report['sync_command']}"]
     return "\n".join(lines) + "\n"
@@ -291,6 +345,25 @@ def render_markdown(report: dict) -> str:
         if entry["candidates"]:
             lines += ["- Candidates: " + "; ".join(_candidate_text(c) for c in entry["candidates"])]
         lines += [""]
+    if report["change_units"]:
+        lines += ["## Parent and BOM upgrades", ""]
+        for unit in report["change_units"]:
+            lines += [f"### {unit['kind']} {unit['coordinate']} {unit['version']}", "", unit["reason"], "",
+                      f"- Declared in: {unit['file']}:{unit['line']}"]  # fmt: skip
+            if unit["picks"]:
+                lines += ["- Suggested: " + "; ".join(f"{p['kind']} {p['version']}" for p in unit["picks"])]
+            if unit["held_by_cooldown"]:
+                lines += [f"- Inside the release cooldown, not evaluated: {', '.join(unit['held_by_cooldown'])}"]
+            if unit["evaluations"]:
+                lines += ["", "| version | level | worst | advisories | cleared | new | changed |", "|---|---|---|---|---|---|---|"]
+                for e in unit["evaluations"]:
+                    if e["exposure"] is None:
+                        lines += [f"| {e['version']} | {e['level']} | resolution failed | | | | |"]
+                        continue
+                    worst = (e["exposure"]["max_severity"] or "none") + (" (blocked)" if e["blocked"] else "")
+                    lines += [f"| {e['version']} | {e['level']} | {worst} | {e['exposure']['total']} | {len(e['cleared'])} | "
+                              f"{len(e['introduced'])} | {e['changed_dependencies']} |"]  # fmt: skip
+            lines += [""]
     lines += ["## Other dependencies", ""]
     lines += [f"- {e['coordinate']} {e['version']}: {e['reason']}" for e in others] or ["None."]
     if report["missing_metadata"]:
