@@ -13,7 +13,7 @@ of them succeeded.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -141,6 +141,19 @@ def apply_changes(changes: Sequence[Change]) -> None:
     for path, text in texts.items():
         if text != _read(path):
             _write(path, text)
+
+
+def rebase(change: Change, old_root: Path, new_root: Path) -> Change:
+    """The same change for another worktree of the same commit: paths move from ``old_root`` to ``new_root``."""
+
+    def moved(path: Path) -> Path:
+        if not path.is_relative_to(old_root):
+            raise ChangeError(f"{path} is not inside {old_root}")
+        return new_root / path.relative_to(old_root)
+
+    if isinstance(change, SetVersion):
+        return replace(change, site=replace(change.site, pom=moved(change.site.pom)))
+    return replace(change, pom=moved(change.pom))
 
 
 def describe(change: Change, root: Path) -> str:

@@ -279,3 +279,32 @@ def test_the_text_outside_the_edited_versions_never_changes(tmp_path_factory, ne
         "<version>1.0.0</version>", f"<version>{new_versions[1]}</version>")
     assert path.read_bytes() == expected.encode("utf-8")
 
+
+
+# rebasing ---------------------------------------------------------------------------------------------------------
+
+
+def test_changes_can_be_pointed_at_another_worktree_with_the_same_layout(tmp_path):
+    from giml.maven.pom_change import rebase
+
+    old, new = tmp_path / "result", tmp_path / "trial"
+    for root in (old, new):
+        root.mkdir()
+        write(root, POM)
+    site = declaration(old / "pom.xml", "o:plain").site
+    moved = rebase(SetVersion(site, "1.0.0", "1.0.3"), old, new)
+    assert moved.site.pom == new / "pom.xml" and moved.site.span == site.span and moved.site.line == site.line
+    assert (moved.expected, moved.version) == ("1.0.0", "1.0.3")
+    apply_changes([moved])
+    assert (old / "pom.xml").read_text() == POM and "<version>1.0.3</version>" in (new / "pom.xml").read_text()
+    pin = rebase(AddPin(old / "pom.xml", c("c:d"), "2", note="n"), old, new)
+    exclusion = rebase(AddExclusion(old / "sub" / "pom.xml", c("o:plain"), c("a:b")), old, new)
+    assert pin == AddPin(new / "pom.xml", c("c:d"), "2", note="n")
+    assert exclusion == AddExclusion(new / "sub" / "pom.xml", c("o:plain"), c("a:b"))
+
+
+def test_rebasing_a_path_outside_the_root_is_refused(tmp_path):
+    from giml.maven.pom_change import rebase
+
+    with pytest.raises(ChangeError, match="is not inside"):
+        rebase(AddPin(tmp_path / "elsewhere" / "pom.xml", c("c:d"), "2"), tmp_path / "result", tmp_path / "trial")
