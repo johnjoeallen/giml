@@ -51,6 +51,15 @@ class Left:
 
 
 @dataclass(frozen=True)
+class Naive:
+    """What bumping everything at once would have done: every ladder's first step, in one build (spec 14)."""
+
+    steps: tuple[str, ...]
+    passed: bool
+    reason: str
+
+
+@dataclass(frozen=True)
 class PlanOutcome:
     committed: tuple[Committed, ...]
     left: tuple[Left, ...]
@@ -60,6 +69,7 @@ class PlanOutcome:
     exposure_before: Exposure
     exposure_after: Exposure
     held: dict[str, str]  # the version each coordinate was at when it was planned
+    naive: Naive | None = None
 
 
 def verdict_of(result: TrialResult) -> Verdict:
@@ -121,13 +131,17 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
     before = analysis.exposure.exposure
     held: dict[str, str] = {}
 
-    def phase(proposals: list[Proposal]) -> bool:
+    naive: list[Naive | None] = []
+
+    def phase(proposals: list[Proposal], kind: str = "unit") -> bool:
         nonlocal builds, stop, detail
         held.update(held_versions(analysis))
         by_key = {p.ladder.key: p for p in proposals}
         budget = Budget(max(options.max_builds - builds, 0), options.max_wall_minutes, clock, started)
         outcome = search([p.ladder for p in proposals], lambda chosen: verdict_of(trial.verify(_changes_of(by_key, chosen))), budget)
         builds += outcome.builds
+        if proposals and kind == "dependency":
+            naive.append(_naive(proposals, trial))
         committed.extend(_commit_steps(outcome.accepted, by_key, root, tier, run_id))
         left.extend(_lefts(outcome, by_key))
         if outcome.stop_reason != "complete":
@@ -137,9 +151,19 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
     if phase(unit_proposals(analysis)):
         analysis = reanalyse("02-tree.log", True)
     if stop != "inconclusive":
-        if phase(dependency_proposals(analysis, options, root_pom)):
+        if phase(dependency_proposals(analysis, options, root_pom), "dependency"):
             analysis = reanalyse("03-tree.log", False)
-    return PlanOutcome(tuple(committed), tuple(left), builds, stop, detail, before, analysis.exposure.exposure, held)
+    return PlanOutcome(tuple(committed), tuple(left), builds, stop, detail, before, analysis.exposure.exposure, held, next(iter(naive), None))
+
+
+def _naive(proposals: list[Proposal], trial: TrialRunner) -> Naive | None:
+    """Verify every ladder's first step together, before anything is committed; None when no ladder has a step."""
+    firsts = {p.ladder.key: p for p in proposals if p.ladder.steps}
+    if not firsts:
+        return None
+    changes = [change for p in firsts.values() for change in p.moves[0].changes]
+    verdict = verdict_of(trial.verify(changes))
+    return Naive(tuple(p.ladder.steps[0].label for p in firsts.values()), verdict.passed, verdict.reason)
 
 
 def deferral_records(outcome: PlanOutcome, project_id: str, run_id: str, now: datetime.datetime) -> list[DeferralRecord]:  # fmt: skip

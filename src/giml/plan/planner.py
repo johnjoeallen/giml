@@ -22,7 +22,7 @@ from giml.maven.project import discover_reactor
 from giml.plan.analysis import Analysis, MissingSnapshotError, Sources, analyse, newest_release, tier_status
 from giml.plan.baseline_run import MAVEN_TIMEOUT_SECONDS, BaselineRun
 from giml.plan.execute import PlanOutcome, deferral_records, execute
-from giml.plan.report import ReportInputs, build_report
+from giml.plan.report import ReportInputs, build_report, render_markdown
 from giml.plan.trial import TrialRunner
 from giml.maven.runner import MavenRunner
 from giml.workspace import Workspace
@@ -108,6 +108,8 @@ def result_section(ws: Workspace, outcome: PlanOutcome | None, remaining: tuple[
         return {**section, "committed": [], "left": [], "builds": 0, "stop_reason": STOP_NO_TIER}
     return {**section, "stop_reason": outcome.stop_reason, "stop_detail": outcome.stop_detail, "builds": outcome.builds,
             "exposure_before": _exposure_dict(outcome.exposure_before), "exposure_after": _exposure_dict(outcome.exposure_after),
+            "naive": {"steps": list(outcome.naive.steps), "passed": outcome.naive.passed, "reason": outcome.naive.reason}
+            if outcome.naive else None,
             "committed": [{"label": c.label, "kind": c.kind, "sha": c.sha, "clears": list(c.clears), "edits": list(c.edits)}
                           for c in outcome.committed],
             "left": [{"key": e.key, "coordinates": list(e.members), "reason": e.reason} for e in outcome.left]}  # fmt: skip
@@ -127,6 +129,10 @@ def render_plan_summary(report: dict) -> str:
         lines.append(f"exposure: {_exposure_text(result['exposure_before'])} -> {_exposure_text(result['exposure_after'])}")
     lines += [f"  + {c['label']} ({c['sha'][:7]})" for c in result["committed"]]
     lines += [f"  - {e['key']}: {e['reason']}" for e in result["left"]]
+    naive = result.get("naive")
+    if naive:
+        verdict = "would have passed" if naive["passed"] else f"would have failed ({naive['reason']})"
+        lines.append(f"naive baseline (every first step at once, {len(naive['steps'])} change(s)): {verdict}")
     if result["remaining_violations"]:
         lines.append(f"enforcer: {len(result['remaining_violations'])} violation(s) remain: {', '.join(result['remaining_violations'])}")
     else:
@@ -143,5 +149,6 @@ def render_plan_markdown(report: dict) -> str:
     for entry in result["committed"]:
         lines += [f"## {entry['label']}", f"Commit `{entry['sha']}`. " + (f"Clears {', '.join(entry['clears'])}." if entry["clears"] else "")]
         lines += [f"- {edit}" for edit in entry["edits"]] + [""]
-    lines += ["## Review", f"`{result['review']}`", "", "## Clean up", "`giml clean <project>`", ""]
+    lines += ["## Review", f"`{result['review']}`", "", "## Clean up", "`giml clean <project>`", "", "---", "",
+              "## Analysis at the base commit", "", render_markdown(report).split("\n", 2)[2]]
     return "\n".join(lines)

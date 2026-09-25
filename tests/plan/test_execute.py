@@ -145,3 +145,13 @@ def test_only_the_edited_poms_are_committed_never_build_output(repo, world):
     run(repo, world, FakeTrial())
     assert "target" not in git(repo, "ls-files")
     assert git(repo, "status", "--porcelain") == "?? target/"
+
+
+def test_the_naive_baseline_is_every_first_step_verified_together(repo, world):
+    outcome = run(repo, world, FakeTrial(poison={"1.0.2"}))
+    assert outcome.naive is not None and outcome.naive.passed is False
+    assert "o:lib 1.0.0 → 1.0.2 (cve_patch)" in outcome.naive.steps and outcome.naive.reason.startswith("compile")
+
+
+def test_the_naive_baseline_passes_when_nothing_conflicts(repo, world):
+    assert run(repo, world, FakeTrial()).naive.passed is True
