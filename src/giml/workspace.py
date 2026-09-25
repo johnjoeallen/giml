@@ -5,6 +5,7 @@ M2 stops after workspace setup; planning (M5) will continue from the result work
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import hashlib
 import secrets
@@ -18,6 +19,7 @@ from giml.git.preflight import RepoState, locate, preflight, project_key
 from giml.git.rewind import RewindTarget, apply_rewind, resolve_rewind
 from giml.git.runner import Git
 from giml.git.worktrees import WorktreeManager, remove_worktree, require_identity, result_branch
+from giml.maven.isolation import RunTemp, run_temp
 from giml.maven.project import discover_reactor
 from giml.store.sqlite_store import SqliteStateStore
 
@@ -66,8 +68,13 @@ def set_up(
     clock: Callable[[], datetime.datetime],
     allow_detached: bool = False,
     rewind_to: str | None = None,
+    verify: Callable[[Workspace, RunTemp], str | None] | None = None,
 ) -> Workspace:
-    """Preflight, lock, record the run and create its result worktree (plus rewind commit)."""
+    """Preflight, lock, record the run and create its result worktree (plus rewind commit).
+
+    ``verify`` runs in the finished workspace, with the run's own temp directory (spec 9.2), before
+    the run is closed; it returns the stop reason to record, or None to use the default.
+    """
     repo = preflight(path, allow_detached)
     reactor = discover_reactor(repo.project_dir)
     rewind = resolve_rewind(repo, rewind_to, reactor) if rewind_to else None
@@ -83,15 +90,24 @@ def set_up(
         # Recorded before the worktree exists, so a crash during setup is still detectable.
         store.start_run(RunRecord(run_id, repo.project_key, repo.base_sha, branch, manager.root / run_id, now,
                                   rewind_from_sha=rewind.sha if rewind else None))  # fmt: skip
+        stop = STOP_PLANNING_NOT_IMPLEMENTED
         try:
-            worktree = manager.create_result(branch)
-            if rewind is not None:
-                apply_rewind(worktree, rewind)
+            with contextlib.ExitStack() as stack:
+                temp = None
+                if verify is not None:
+                    log = state_dir / "runs" / run_id / "logs" / "temp.log"
+                    temp = stack.enter_context(run_temp(state_dir, run_id, log_path=log))
+                worktree = manager.create_result(branch)
+                if rewind is not None:
+                    apply_rewind(worktree, rewind)
+                result = Workspace(run_id, repo, branch, worktree, rewind, crashed)
+                if verify is not None:
+                    stop = verify(result, temp) or stop
         except BaseException:
             store.finish_run(run_id, clock(), STOP_SETUP_FAILED)
             raise
-        store.finish_run(run_id, clock(), STOP_PLANNING_NOT_IMPLEMENTED)
-    return Workspace(run_id, repo, branch, worktree, rewind, crashed)
+        store.finish_run(run_id, clock(), stop)
+    return result
 
 
 @dataclass(frozen=True)

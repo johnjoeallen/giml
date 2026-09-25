@@ -52,7 +52,7 @@ def tooling_fingerprint() -> str:
 
 def maven_version(environ: Mapping[str, str]) -> str:
     """The version `mvn` reports, or "unknown" when it cannot be run."""
-    mvn = shutil.which("mvn", path=environ.get("PATH"))
+    mvn = shutil.which("mvn", path=environ.get("PATH", ""))
     if mvn is None:
         return "unknown"
     result = subprocess.run([mvn, "--version"], capture_output=True, text=True, timeout=60, check=False, env=dict(environ))

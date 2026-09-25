@@ -9,6 +9,7 @@ import sys
 
 import pytest
 
+from giml.maven.runner import MavenResult
 from giml.cli import Environment, ExitCode, main
 from giml.git.lock import ProjectLock
 from giml.git.preflight import preflight
@@ -37,10 +38,19 @@ def repo(tmp_path):
     return repo
 
 
+class PassingMaven:
+    """Every Maven run succeeds: these tests are about the workspace, not about builds."""
+
+    def __call__(self, project, args, log, timeout, env):
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("[INFO] BUILD SUCCESS\n")
+        return MavenResult(tuple(args), 0, 0.1, log, False)
+
+
 @pytest.fixture
 def cli(tmp_path):
     state = tmp_path / "state"
-    env = Environment(clock=Clock(), environ={})
+    env = Environment(clock=Clock(), environ={}, maven=PassingMaven())
 
     def run(*args):
         return main(["--state-dir", str(state), *map(str, args)], env)
@@ -65,9 +75,10 @@ def test_plan_sets_up_workspace_without_touching_the_checkout(repo, cli, capsys)
     branch, worktree = output_value(out, "branch"), output_value(out, "worktree")
     base = git(repo, "rev-parse", "HEAD")
     assert branch.startswith(f"giml/{base[:7]}/20260924T1200")
-    assert git(repo, "rev-parse", branch) == base
+    assert git(repo, "rev-parse", f"{branch}~1") == base  # the [giml-setup] commit sits directly on the base
+    assert git(repo, "log", "-1", "--format=%s", branch).startswith("[giml-setup]")
     assert git(worktree, "symbolic-ref", "--short", "HEAD") == branch
-    assert "stopped after workspace setup: planning arrives in milestone 5" in out
+    assert "stopped after baseline verification: planning arrives in milestone 5" in out
     assert f"review: git diff {base[:7]}..{branch}" in out
     assert fingerprint(repo) == before
 
@@ -98,7 +109,8 @@ def test_plan_with_rewind_commits_only_old_pom_and_runs_no_hooks(repo, cli, tmp_
     base = git(repo, "rev-parse", "HEAD")
     assert branch.startswith(f"giml/rewind/{base[:7]}/")
     assert git(repo, "diff", "--name-only", f"{base}..{branch}") == "pom.xml"
-    assert git(repo, "log", "-1", "--format=%s", branch) == f"[giml-rewind] pom.xml from {old[:7]} (synthetic)"
+    assert git(repo, "log", "-1", "--format=%s", f"{branch}~1") == f"[giml-rewind] pom.xml from {old[:7]} (synthetic)"
+    assert git(repo, "log", "-1", "--format=%s", branch).startswith("[giml-setup]")  # follows the rewind commit (spec 5.3 step 5)
     assert f"rewound 1 pom.xml file(s) to {old[:7]}" in out
     assert "2.9.8" in (tmp_path / worktree / "pom.xml").read_text()
     assert not marker.exists()

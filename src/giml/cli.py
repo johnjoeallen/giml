@@ -34,6 +34,7 @@ from giml.maven.jdk import catalog
 from giml.maven.tree import ResolutionError
 from giml.maven.runner import MavenNotFound, run_maven
 from giml.plan.analysis import MissingSnapshotError, Sources, dry_run
+from giml.plan.baseline_run import BaselineInfrastructureError, BaselineRun, run_baseline
 from giml.plan.report import render_summary
 from giml.git.lock import LockHeld
 from giml.git.preflight import PreflightRefusal
@@ -222,7 +223,14 @@ def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore
     if args.strategy or args.scope or args.major_updates or args.major_updates_test_scope:
         raise UsageError("--strategy, --scope, --major-updates and --major-updates-test-scope apply to planning; "
                          "use --dry-run until planning is built")  # fmt: skip
-    ws = workspace.set_up(args.path, root, store, env.clock, args.allow_detached, args.rewind_to)
+    config = load_gate_config(args.gate_config or default_gate_config_path())
+    verified: list[BaselineRun] = []
+
+    def verify(ws: workspace.Workspace, temp) -> str | None:
+        verified.append(run_baseline(ws, temp, root, config, catalog(args.config), env.environ, env.maven))
+        return verified[0].baseline.stop_reason
+
+    ws = workspace.set_up(args.path, root, store, env.clock, args.allow_detached, args.rewind_to, verify)
     for run in ws.crashed_runs:
         print(f"warning: earlier run {run.id} never finished (crashed); its worktree {run.worktree_path} "
               "is left for inspection, remove it with `giml clean`", file=sys.stderr)  # fmt: skip
@@ -234,10 +242,39 @@ def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore
               f"(committed {ws.rewind.committed_at}); synthetic")  # fmt: skip
         for path in ws.rewind.kept_paths:
             print(f"kept at base (not present at {ws.rewind.sha[:7]}): {path}")
-    print("stopped after workspace setup: planning arrives in milestone 5")
+    baseline = verified[0]
+    print_baseline(baseline)
+    raise_if_stopped(baseline, ws.rewind.sha[:7] if ws.rewind else None)
+    print("stopped after baseline verification: planning arrives in milestone 5")
     print(f"review: git diff {ws.repo.base_sha[:7]}..{ws.branch}")
     print(f"cleanup: giml clean {ws.repo.project_dir}")
     return ExitCode.SUCCESS
+
+
+def print_baseline(run: BaselineRun) -> None:
+    baseline, cache = run.baseline, run.report["cache"]
+    for stage in baseline.stages:
+        detail = f"{stage.outcome.duration_seconds:.1f} s" if stage.outcome else "not run"
+        if stage.outcome is not None and not stage.outcome.passed:
+            detail += f", {stage.outcome.failure_class} {stage.outcome.signature}"
+        print(f"baseline {stage.stage}: {stage.status} ({detail}{', cached' if stage.outcome and stage.outcome.cache_hit else ''})")
+    if baseline.enforcer_mode == "reference":
+        subjects = ", ".join(v.identity for v in baseline.reference_violations)
+        print(f"enforcer: {len(baseline.reference_violations)} violation(s) at the baseline become the reference set: {subjects}")
+    print(f"cache: {cache['hits']} hit(s), {cache['misses']} miss(es), {cache['seconds_saved']:.1f} s saved")
+    print(f"baseline report: {run.report_path}")
+
+
+def raise_if_stopped(run: BaselineRun, rewind_sha: str | None) -> None:
+    baseline, log = run.baseline, run.last_log
+    if baseline.upgradeable:
+        return
+    if baseline.stop == "infrastructure":
+        raise BaselineInfrastructureError(f"infrastructure failure at the baseline (not the project's fault, try again); see {log}")
+    what = "build" if baseline.stop == "build_failed" else "unit tests"
+    if rewind_sha:
+        raise PrerequisiteError(f"rewind point {rewind_sha} is unusable: the {what} fail with its pom.xml files (spec 5.3); see {log}")
+    raise PrerequisiteError(f"the {what} fail at the base commit with giml's setup applied; see {log}")
 
 
 def cmd_assess(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
@@ -298,7 +335,7 @@ def main(argv: Sequence[str] | None = None, env: Environment | None = None) -> i
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.CONFIGURATION
     except (FetchError, MetadataError, GitError, BranchExistsError, ForeignWorktreeError, MavenNotFound,
-            ReportError, InsufficientSpace, subprocess.TimeoutExpired, zipfile.BadZipFile, sqlite3.Error,
-            OSError) as exc:  # fmt: skip
+            ReportError, InsufficientSpace, BaselineInfrastructureError, subprocess.TimeoutExpired, zipfile.BadZipFile,
+            sqlite3.Error, OSError) as exc:  # fmt: skip
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.INFRASTRUCTURE
