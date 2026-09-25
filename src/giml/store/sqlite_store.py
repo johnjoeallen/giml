@@ -14,7 +14,7 @@ from importlib import resources
 from pathlib import Path
 
 from giml.core.model import (
-    BuildAttemptRecord, CandidateStateRecord, ExampleRecord, GateResultRecord, ProjectRecord, RunRecord, SnapshotInfo,
+    BuildAttemptRecord, CandidateStateRecord, DeferralRecord, ExampleRecord, GateResultRecord, ProjectRecord, RunRecord, SnapshotInfo,
 )  # fmt: skip
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
@@ -234,6 +234,31 @@ class SqliteStateStore:
             "SELECT id, run_id, features_json, label_json, split_group, dedup_hash FROM example ORDER BY id"  # pragma: no mutate
         ).fetchall()
         return [ExampleRecord(*row) for row in rows]
+
+    def save_deferral(self, deferral: DeferralRecord) -> None:
+        self._conn.execute(
+            "INSERT INTO deferral (id, project_id, coordinate, held_at_version, reason, trigger_json, created_at, "  # pragma: no mutate
+            "resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",  # pragma: no mutate
+            (deferral.id, deferral.project_id, deferral.coordinate, deferral.held_at_version, deferral.reason,
+             deferral.trigger_json, _utc_text(deferral.created_at),
+             _utc_text(deferral.resolved_at) if deferral.resolved_at else None),
+        )  # fmt: skip
+
+    def list_deferrals(self, project_id: str, open_only: bool = False) -> list[DeferralRecord]:
+        rows = self._conn.execute(
+            "SELECT id, project_id, coordinate, held_at_version, reason, trigger_json, created_at, resolved_at "  # pragma: no mutate
+            "FROM deferral WHERE project_id = ? AND (? = 0 OR resolved_at IS NULL) ORDER BY created_at, id",  # pragma: no mutate
+            (project_id, int(open_only)),
+        ).fetchall()
+        return [DeferralRecord(*row[:6], _parse_time(row[6]), _parse_time(row[7])) for row in rows]
+
+    def resolve_deferral(self, deferral_id: str, resolved_at: datetime.datetime) -> None:
+        updated = self._conn.execute(
+            "UPDATE deferral SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL",  # pragma: no mutate
+            (_utc_text(resolved_at), deferral_id),
+        ).rowcount
+        if updated != 1:
+            raise StoreError(f"deferral {deferral_id} is unknown or already resolved")
 
 
 def _gate_result_from_row(row: tuple) -> GateResultRecord:

@@ -157,6 +157,20 @@ class BuildAttemptRecord:
 
 
 @dataclass(frozen=True)
+class DeferralRecord:
+    """A dependency the planner left where it was, why, and what would justify trying again (spec 8.4)."""
+
+    id: str
+    project_id: str
+    coordinate: str
+    held_at_version: str
+    reason: str
+    trigger_json: str
+    created_at: datetime.datetime
+    resolved_at: datetime.datetime | None = None
+
+
+@dataclass(frozen=True)
 class ExampleRecord:
     """A labelled training example (spec 15). ``dedup_hash`` drops exact repeats."""
 
