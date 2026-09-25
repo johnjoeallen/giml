@@ -261,3 +261,17 @@ def test_an_edit_whose_file_has_changed_underneath_is_caught_when_applied(world)
     world[0].write_text(world[0].read_text().replace("<version>1.0.0</version>\n        </dependency>\n        <dependency>\n            <groupId>o</groupId>\n            <artifactId>clean", "<version>9.9.9</version>\n        </dependency>\n        <dependency>\n            <groupId>o</groupId>\n            <artifactId>clean"))
     with pytest.raises(ChangeError):
         apply_changes(list(proposal.moves[0].changes))
+
+
+def test_general_scope_adds_one_step_updates_after_the_cve_ladders(world):
+    proposals = dependency_proposals(analysis(world, options(scope="general"), release_overrides={"o:clean": ["1.0.0", "1.0.1"]}),
+                                     options(scope="general"), world[0])
+    keys = [p.ladder.key for p in proposals]
+    assert keys[-1] == "upd:o:clean@1.0.0" and keys[:-1] == [k for k in keys if k.startswith("dep:")]
+    last = proposals[-1]
+    assert [s.kind for s in last.ladder.steps] == ["next_patch"] and last.moves[0].changes[0].version == "1.0.1"
+    assert last.ladder.order == len(proposals) - 1
+
+
+def test_cve_scope_leaves_other_dependencies_alone(world):
+    assert not any(p.ladder.key.startswith("upd:") for p in dependency_proposals(analysis(world), options(), world[0]))

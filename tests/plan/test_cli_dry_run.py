@@ -110,7 +110,7 @@ def test_rewind_is_not_yet_combined_with_a_dry_run(state, repo, capsys):
     assert "--rewind-to is not supported with --dry-run yet" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("flag", [["--strategy", "latest"], ["--scope", "general"]])
+@pytest.mark.parametrize("flag", [["--strategy", "latest"]])
 def test_planning_options_that_are_not_built_yet_are_refused(state, repo, capsys, flag):
     assert main(["--state-dir", str(state), "plan", str(repo), *flag], env()) == ExitCode.CONFIGURATION
     assert "is not implemented yet" in capsys.readouterr().err

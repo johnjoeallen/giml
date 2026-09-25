@@ -19,7 +19,7 @@ from giml.maven.declarations import Declarations, Site
 from giml.maven.pom_change import AddPin, Change, SetVersion
 from giml.maven.version import ComparableVersion
 from giml.plan.analysis import Analysis
-from giml.plan.candidates import EDIT, PIN, DependencyPlan, level
+from giml.plan.candidates import EDIT, NEXT_MINOR, NEXT_PATCH, PIN, UPDATE_AVAILABLE, DependencyPlan, level
 from giml.plan.search import Ladder, Step
 
 _LEVELS = ("patch", "minor", "major")
@@ -137,14 +137,31 @@ def _group_proposal(members: list[DependencyPlan], sites: tuple[Site, ...], anal
     return Proposal(ladder, tuple(moves), tuple(str(m.coordinate) for m in members), "dependency", blocked)
 
 
+def _general_proposal(members: list[DependencyPlan], sites: tuple[Site, ...]) -> Proposal | None:
+    """A one-step ladder for a general update: the next patch or minor, when every member agrees on it."""
+    members = sorted(members, key=lambda m: str(m.coordinate))
+    usable = [next((c for c in m.candidates if c.blocked is None and c.kinds[0] in (NEXT_PATCH, NEXT_MINOR)), None) for m in members]
+    if any(c is None for c in usable) or len({(c.version, c.kinds[0]) for c in usable}) != 1:
+        return None
+    version, kind = usable[0].version, usable[0].kinds[0]
+    key = f"upd:{'+'.join(str(m.coordinate) for m in members)}@{members[0].version}"
+    label = f"{_short(members)} {members[0].version} → {version} ({kind})"
+    changes = tuple(SetVersion(site, site_text(site), version) for site in sites)
+    return Proposal(Ladder(key, (Step(key, label, kind, 0),), 0), (Move(changes, ()),), tuple(str(m.coordinate) for m in members), "dependency")
+
+
 def dependency_proposals(analysis: Analysis, options, root_pom: Path) -> list[Proposal]:
-    """Ladders for the CVE-affected dependencies, worst first."""
+    """Ladders for the CVE-affected dependencies, worst first; under ``scope: general`` then one step per other declared dependency."""
     groups: dict[object, list[DependencyPlan]] = {}
     sites_of: dict[object, tuple[Site, ...]] = {}
+    general: dict[object, list[DependencyPlan]] = {}
     for plan in analysis.plans:
-        if not plan.cve_affected:
-            continue
         sites = _edit_sites(plan, analysis.declarations) if plan.change == EDIT else ()
+        if not plan.cve_affected:
+            if plan.status == UPDATE_AVAILABLE and sites:
+                general.setdefault(frozenset((s.pom, s.span) for s in sites), []).append(plan)
+                sites_of.setdefault(frozenset((s.pom, s.span) for s in sites), sites)
+            continue
         if plan.change in (EDIT, PIN) and sites:
             group = frozenset((s.pom, s.span) for s in sites)
         else:
@@ -153,8 +170,12 @@ def dependency_proposals(analysis: Analysis, options, root_pom: Path) -> list[Pr
         sites_of[group] = sites
     proposals = [_group_proposal(members, sites_of[group], analysis, options.major_updates, root_pom) for group, members in groups.items()]
     proposals.sort(key=lambda p: (p.ladder.order, p.ladder.key))
+    cve_sites = {group for group in groups if isinstance(group, frozenset)}
+    extra = [] if options.scope != "general" else [
+        p for group, members in sorted(general.items(), key=lambda item: str(item[1][0].coordinate))
+        if not any(group & taken for taken in cve_sites) and (p := _general_proposal(members, sites_of[group])) is not None]
     return [Proposal(Ladder(p.ladder.key, p.ladder.steps, index, p.ladder.note), p.moves, p.members, p.kind, p.blocked)
-            for index, p in enumerate(proposals)]  # fmt: skip
+            for index, p in enumerate([*proposals, *extra])]  # fmt: skip
 
 
 def unit_proposals(analysis: Analysis) -> list[Proposal]:
