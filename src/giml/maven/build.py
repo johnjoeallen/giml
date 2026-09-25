@@ -30,6 +30,7 @@ class StageOutcome:
     duration_seconds: float
     log_path: Path
     failure: Failure | None  # None when the stage passed
+    cache_hit: bool = False  # answered from the result cache, with the original timing (spec 10)
 
     @property
     def failure_class(self) -> str | None:

@@ -26,6 +26,7 @@ _ALLOWED: dict[str, tuple[str, ...] | None] = {
     "cat-file": None,
     "commit": None,
     "config": ("--get",),
+    "diff": ("HEAD",),  # read-only; other first arguments could write (--output=FILE)
     "for-each-ref": None,
     "log": None,
     "ls-files": None,

@@ -47,3 +47,39 @@ def test_the_same_real_failure_has_the_same_signature_from_two_directories(tmp_p
     assert first.signature == second.signature and first.failure.key_lines == second.failure.key_lines
     assert str(tmp_path) not in "\n".join(first.failure.key_lines)
     assert "App.java:[<n>,<n>] cannot find symbol" in first.failure.key_lines
+
+
+def test_a_repeated_real_stage_is_answered_from_the_cache(tmp_path, real_home):
+    from giml.maven.cache import BuildEnvironment, CachingBuildRunner, maven_version, stage_key_parts, tooling_fingerprint
+    from giml.store.result_cache import FileResultCache
+    from tests.git.repo_helpers import git, make_repo
+
+    if shutil.which("mvn") is None or shutil.which("java") is None:
+        pytest.skip("mvn and java are required")
+    project = make_repo(tmp_path / "project")
+    (project / "src" / "main" / "java" / "t").mkdir(parents=True)
+    (project / "pom.xml").write_text(POM)
+    (project / "src" / "main" / "java" / "t" / "App.java").write_text("package t;\npublic class App { int f() { return 1; } }\n")
+    git(project, "add", "-A")
+    git(project, "commit", "-q", "-m", "fixture")
+    starts = []
+
+    def counting_maven(*args, **kwargs):
+        starts.append(args[1])
+        return run_maven(*args, **kwargs)
+
+    environment = BuildEnvironment(None, maven_version(os.environ), tooling_fingerprint(), 3)
+    with run_temp(tmp_path / "state", "run-1") as temp:
+        env = isolated_env(None, os.environ, temp)
+        runner = CachingBuildRunner(MavenBuildRunner(counting_maven, env, tmp_path / "logs"), FileResultCache(tmp_path / "cache"),
+                                    lambda worktree, stage: stage_key_parts(worktree, stage, environment), tmp_path / "logs")  # fmt: skip
+        first = runner.run_stage(project, "compile", 600)
+        second = runner.run_stage(project, "compile", 600)
+        (project / "src" / "main" / "java" / "t" / "App.java").write_text("package t;\npublic class App { int f() { return 2; } }\n")
+        third = runner.run_stage(project, "compile", 600)
+    assert (first.passed, first.cache_hit, second.passed, second.cache_hit, third.cache_hit) == (True, False, True, True, False)
+    assert len(starts) == 2  # the hit did not start Maven; the changed source did
+    assert second.duration_seconds == first.duration_seconds
+    metrics = runner.metrics().as_dict()
+    assert (metrics["hits"], metrics["misses"], metrics["hit_rate"]) == (1, 2, pytest.approx(1 / 3))
+    assert metrics["seconds_saved"] == first.duration_seconds

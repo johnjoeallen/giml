@@ -27,6 +27,8 @@ def test_push_is_always_forbidden(repo, args):
         ("send-email", (), "not on giml's allowlist"),
         ("fetch", (), "not on giml's allowlist"),
         ("remote", ("set-url", "origin", "x"), "only allowed as: get-url"),
+        ("diff", ("--output=/tmp/x", "HEAD"), "only allowed as: HEAD"),
+        ("diff", (), "only allowed as: HEAD"),
         ("remote", (), "only allowed as: get-url"),
         ("config", ("user.name", "x"), "only allowed as: --get"),
     ],
@@ -34,6 +36,14 @@ def test_push_is_always_forbidden(repo, args):
 def test_non_allowlisted_commands_are_rejected_before_running(repo, subcommand, args, message):
     with pytest.raises(ForbiddenGitCommand, match=message):
         Git(repo).run(subcommand, *args)
+
+
+def test_diff_against_head_reports_uncommitted_changes_to_tracked_files(repo):
+    assert Git(repo).out("diff", "HEAD", "--binary", "--no-ext-diff") == ""
+    (repo / "new-file").write_text("untracked\n")
+    assert Git(repo).out("diff", "HEAD", "--binary", "--no-ext-diff") == ""  # untracked files are not part of it
+    (repo / "README").write_text("changed\n")
+    assert "+changed" in Git(repo).out("diff", "HEAD", "--binary", "--no-ext-diff")
 
 
 def test_allowlisted_command_runs_and_returns_output(repo):

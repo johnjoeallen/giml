@@ -520,6 +520,8 @@ Cache key for a build outcome = SHA-256 of:
 - gate-config version and the stage name,
 - for startup: the smoke settings hash (non-secret parts) and profile name.
 
+**As implemented** (2026-09-25, `maven/cache.py`): "base tree hash and POM edits" is the worktree's `HEAD^{tree}` plus a hash of `git diff HEAD --binary` (the uncommitted changes to tracked files, that is the candidate's edits; untracked build output does not count and no path is part of the key, so the same content in any worktree shares a result); the JDK is its version from the `release` file, Maven its `mvn --version`, and "plugin versions" is a fingerprint of giml's pinned tool versions (the project's own plugin versions are in its POMs, hence in the diff or the tree). The resolved-dependency hash is part of the key when the caller supplies one. Outcomes that say nothing about the candidate (`infrastructure`, `timeout`) are never stored. An entry of another schema version is ignored.
+
 Rules:
 - A cache **hit** returns the stored outcome plus its original timing; reports show hit/miss.
 - Pass results are commit-specific. Known-bad *transitions* (dependency, from → to, error signature) are stored separately as **knowledge** (cross-run, cross-project prior); they influence ordering, never verdicts.
