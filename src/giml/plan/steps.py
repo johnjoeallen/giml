@@ -41,6 +41,7 @@ class Proposal:
     members: tuple[str, ...]  # the coordinates the ladder is about
     kind: str  # "dependency" or "unit"
     blocked: tuple[str, ...] = field(default=())  # reasons some candidates were left out
+    resolves: tuple[str, ...] = field(default=())  # enforcer violations (identities) a step must remove to count as passing
 
 
 def site_text(site: Site) -> str:
@@ -194,4 +195,28 @@ def unit_proposals(analysis: Analysis) -> list[Proposal]:
             steps.append(Step(key, f"{unit.kind} {unit.coordinate} {unit.version} → {evaluation.version} ({kind})", kind, rank))
             moves.append(Move((SetVersion(unit.site, site_text(unit.site), evaluation.version),), evaluation.cleared))
         proposals.append(Proposal(Ladder(key, tuple(steps), len(proposals)), tuple(moves), (str(unit.coordinate),), "unit"))
+    return proposals
+
+
+def enforcer_proposals(violations, analysis: Analysis, root_pom: Path) -> list[Proposal]:
+    """One-step ladders that align a dependency-convergence conflict on its highest version (spec 8.4).
+
+    The step edits the declarations that are below that version, or pins the artifact in the root POM when
+    nothing declares it. It only counts as passing if the conflict is actually gone.
+    """
+    proposals = []
+    for violation in violations:
+        versions = violation.detail.get("versions", []) if violation.rule == "DependencyConvergence" else []
+        if len(versions) < 2:
+            continue
+        coordinate, target = Coordinate.parse(violation.subject), max(versions, key=ComparableVersion)
+        below = [d for d in analysis.declarations.for_coordinate(coordinate)
+                 if d.site is not None and d.version and ComparableVersion(d.version) < ComparableVersion(target)]  # fmt: skip
+        sites = tuple({(d.site.pom, d.site.span): d.site for d in below}.values())
+        changes: tuple[Change, ...] = tuple(SetVersion(site, site_text(site), target) for site in sites) \
+            or (AddPin(root_pom, coordinate, target, f"aligns {violation.identity}; re-evaluate on a new release"),)  # fmt: skip
+        key = f"enf:{violation.subject}"
+        label = f"{violation.subject} → {target} (aligns dependency convergence)"
+        proposals.append(Proposal(Ladder(key, (Step(key, label, "enforcer_pin", 0),), 0), (Move(changes, ()),),
+                                  (violation.subject,), "enforcer", resolves=(violation.identity,)))  # fmt: skip
     return proposals

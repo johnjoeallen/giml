@@ -45,7 +45,7 @@ class FakeTrial:
     """Passes unless the pom text a trial would produce contains a poisoned version."""
 
     def __init__(self, poison=()):
-        self.poison, self.calls = poison, []
+        self.poison, self.calls, self.reference = poison, [], ()
 
     def refresh_reference(self):
         self.refreshed = getattr(self, "refreshed", 0) + 1
@@ -164,3 +164,30 @@ def test_the_reference_is_refreshed_after_each_phase_that_committed(repo, world)
     trial = FakeTrial()
     run(repo, world, trial)
     assert trial.refreshed == 1
+
+
+def test_a_passing_trial_that_leaves_a_required_violation_is_a_failure():
+    from giml.maven.enforcer import Violation
+
+    gone = Violation("DependencyConvergence", "o:lib", {"versions": ["1", "2"]})
+    passing = result()
+    assert verdict_of(passing, frozenset({gone.identity})).reason == f"did not resolve {gone.identity}"
+    resolved = TrialResult(True, False, None, None, passing.outcomes, (), (gone,))
+    assert verdict_of(resolved, frozenset({gone.identity})).passed
+
+
+def test_a_baseline_convergence_conflict_is_aligned_and_committed_when_it_resolves(repo, world):
+    from giml.maven.enforcer import Violation
+
+    conflict = Violation("DependencyConvergence", "o:clean", {"versions": ["1.0.0", "1.0.1"]})
+
+    class Resolving(FakeTrial):
+        def verify(self, changes):
+            base = super().verify(changes)
+            return TrialResult(True, False, None, None, base.outcomes, (), (conflict,)) if changes else base
+
+    trial = Resolving()
+    trial.reference = (conflict,)
+    outcome = run(repo, world, trial)
+    assert any(c.kind == "enforcer_pin" and "o:clean" in c.label for c in outcome.committed)
+    assert "<version>1.0.1</version>" in (repo / "pom.xml").read_text()

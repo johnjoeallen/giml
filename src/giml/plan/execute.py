@@ -23,7 +23,7 @@ from giml.maven.pom_change import Change, apply_changes, describe
 from giml.plan.analysis import Analysis
 from giml.plan.exposure import Exposure
 from giml.plan.search import Budget, Outcome, Step, Verdict, search
-from giml.plan.steps import Proposal, dependency_proposals, unit_proposals
+from giml.plan.steps import Proposal, dependency_proposals, enforcer_proposals, unit_proposals
 from giml.plan.trial import TrialResult, TrialRunner
 
 Reanalyse = Callable[[str, bool], Analysis]  # (log name, evaluate parent/BOM units) -> the worktree's current analysis
@@ -72,8 +72,14 @@ class PlanOutcome:
     naive: Naive | None = None
 
 
-def verdict_of(result: TrialResult) -> Verdict:
-    """The search's view of a trial: a failure's reason names its stage and class, a build counts unless every stage was cached."""
+def verdict_of(result: TrialResult, required: frozenset[str] = frozenset()) -> Verdict:
+    """The search's view of a trial: a failure's reason names its stage and class, a build counts unless every stage was cached.
+
+    ``required`` are enforcer violations the candidate must have removed: passing while they remain is a failure.
+    """
+    missing = sorted(required - {v.identity for v in result.resolved_violations}) if result.passed else []
+    if missing:
+        return Verdict(False, False, f"did not resolve {', '.join(missing)}", 0 if result.cache_hits == len(result.outcomes) else 1)
     if result.passed or result.failure is None:
         reason = "passed" if result.passed else "did not pass"
     else:
@@ -138,7 +144,12 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
         held.update(held_versions(analysis))
         by_key = {p.ladder.key: p for p in proposals}
         budget = Budget(max(options.max_builds - builds, 0), options.max_wall_minutes, clock, started)
-        outcome = search([p.ladder for p in proposals], lambda chosen: verdict_of(trial.verify(_changes_of(by_key, chosen))), budget)
+
+        def verify(chosen: Mapping[str, Step]) -> Verdict:
+            required = frozenset(i for key in chosen for i in by_key[key].resolves)
+            return verdict_of(trial.verify(_changes_of(by_key, chosen)), required)
+
+        outcome = search([p.ladder for p in proposals], verify, budget)
         builds += outcome.builds
         if proposals and kind == "dependency":
             naive.append(_naive(proposals, trial))
@@ -153,9 +164,18 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
     if phase(unit_proposals(analysis)):
         analysis = reanalyse("02-tree.log", True)
     if stop != "inconclusive":
-        if phase(dependency_proposals(analysis, options, root_pom), "dependency"):
+        if phase(_dependency_phase(analysis, options, root_pom, trial.reference), "dependency"):
             analysis = reanalyse("03-tree.log", False)
     return PlanOutcome(tuple(committed), tuple(left), builds, stop, detail, before, analysis.exposure.exposure, held, next(iter(naive), None))
+
+
+def _dependency_phase(analysis: Analysis, options, root_pom: Path, violations) -> list[Proposal]:
+    """CVE ladders first, then the enforcer alignments, then general updates; ordered as one list for the search."""
+    proposals = dependency_proposals(analysis, options, root_pom)
+    cve = [p for p in proposals if p.ladder.key.startswith("dep:")]
+    rest = [p for p in proposals if not p.ladder.key.startswith("dep:")]
+    ordered = [*cve, *enforcer_proposals(violations, analysis, root_pom), *rest]
+    return [dataclasses.replace(p, ladder=dataclasses.replace(p.ladder, order=index)) for index, p in enumerate(ordered)]
 
 
 def _naive(proposals: list[Proposal], trial: TrialRunner) -> Naive | None:

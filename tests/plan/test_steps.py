@@ -275,3 +275,29 @@ def test_general_scope_adds_one_step_updates_after_the_cve_ladders(world):
 
 def test_cve_scope_leaves_other_dependencies_alone(world):
     assert not any(p.ladder.key.startswith("upd:") for p in dependency_proposals(analysis(world), options(), world[0]))
+
+
+def convergence(subject, *versions):
+    from giml.maven.enforcer import Violation
+
+    return Violation("DependencyConvergence", subject, {"versions": list(versions)})
+
+
+def test_a_convergence_conflict_is_aligned_on_its_highest_version(world):
+    from giml.plan.steps import enforcer_proposals
+
+    declared, undeclared, single, other = (convergence("o:lib", "1.0.0", "1.0.2"), convergence("o:deep", "3.0", "3.1"),
+                                           convergence("o:lib", "1.0.0"), Violation_of("BanDuplicateClasses", "a + b"))
+    proposals = by_key(enforcer_proposals([declared, undeclared, single, other], analysis(world), world[0]))
+    assert set(proposals) == {"enf:o:lib", "enf:o:deep"}
+    (edit,) = proposals["enf:o:lib"].moves[0].changes
+    assert isinstance(edit, SetVersion) and (edit.expected, edit.version) == ("1.0.0", "1.0.2")
+    (pin,) = proposals["enf:o:deep"].moves[0].changes
+    assert isinstance(pin, AddPin) and pin.version == "3.1" and "aligns DependencyConvergence:o:deep" in pin.note
+    assert proposals["enf:o:lib"].resolves == (declared.identity,) and proposals["enf:o:lib"].kind == "enforcer"
+
+
+def Violation_of(rule, subject):
+    from giml.maven.enforcer import Violation
+
+    return Violation(rule, subject, {})
