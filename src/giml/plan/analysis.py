@@ -28,14 +28,14 @@ from giml.data.osv import LocalOsvAdvisorySource
 from giml.git.lock import ProjectLock
 from giml.git.preflight import preflight
 from giml.git.worktrees import WorktreeManager
-from giml.maven.declarations import read_declarations
+from giml.maven.declarations import Declarations, read_declarations
 from giml.maven.isolation import isolated_env, run_temp
 from giml.maven.jdk import JdkCatalog, catalog, resolve_jdk
 from giml.maven.project import discover_reactor
 from giml.maven.runner import MavenRunner, run_maven
-from giml.maven.tree import ResolutionError, resolve_reactor
+from giml.maven.tree import ModuleTree, ResolutionError, resolve_reactor
 from giml.maven.version import ComparableVersion
-from giml.plan.candidates import is_prerelease, plan_dependency
+from giml.plan.candidates import DependencyPlan, is_prerelease, plan_dependency
 from giml.plan.exposure import TreeExposure, resolve_exposure
 from giml.plan.parents import ChangeUnit, UnitPlan, change_units, not_evaluated, plan_change_unit, with_version
 from giml.plan.report import ReportInputs, TierStatus, build_report, render_markdown
@@ -112,6 +112,59 @@ def _plan_units(units: list[ChangeUnit], releases, exposure: TreeExposure, tier:
     return plans
 
 
+@dataclass(frozen=True)
+class Analysis:
+    """What a worktree's dependencies look like: resolved trees, where versions are declared, CVE exposure and candidates."""
+
+    trees: list[ModuleTree]
+    declarations: Declarations
+    exposure: TreeExposure
+    plans: list[DependencyPlan]  # one per resolved dependency, in exposure order
+    unit_plans: list[UnitPlan]  # parent and BOM change units
+    available: dict[Coordinate, list[VersionRelease] | None]  # Central versions per coordinate
+
+
+def analyse(
+    project_dir: Path,
+    poms: list[Path],
+    logs: Path,
+    timeout: float,
+    maven: MavenRunner,
+    maven_env: Mapping[str, str] | None,
+    sources: Sources,
+    osv_snapshot: SnapshotInfo,
+    central_snapshot: SnapshotInfo | None,
+    options: PlanningSettings,
+    tier: TierStatus,
+    now: datetime.datetime,
+    log_name: str = "01-tree.log",
+) -> Analysis:
+    """Resolve the reactor's trees, match them against the recorded snapshots and plan every dependency and change unit.
+
+    Parent and BOM candidates are evaluated by writing each version into ``poms`` temporarily (restored
+    afterwards), so the worktree must be one nobody else is using. Raises ResolutionError.
+    """
+    trees = resolve_reactor(project_dir, poms, logs / log_name, timeout, maven, maven_env)
+    declarations = read_declarations(poms)
+    steps = itertools.count(2)
+    with contextlib.ExitStack() as stack:
+        advisories = _open(stack, sources.advisories(osv_snapshot))
+        releases = _open(stack, sources.metadata(central_snapshot)) if central_snapshot else None
+        exposure = resolve_exposure(trees, advisories)
+        available = {d.coordinate: releases.versions(d.coordinate) if releases else None for d in exposure.dependencies}
+        plans = [plan_dependency(d, declarations.for_coordinate(d.coordinate), available[d.coordinate], advisories, options, now)
+                 for d in exposure.dependencies]  # fmt: skip
+
+        def resolve_with(unit: ChangeUnit, version: str) -> TreeExposure:
+            name = re.sub(r"[^\w.\-]", "_", f"{next(steps):02d}-{unit.kind}-{unit.coordinate.artifact_id}-{version}")
+            with with_version(unit.site, version, expected=unit.version):
+                candidate = resolve_reactor(project_dir, poms, logs / f"{name}.log", timeout, maven, maven_env)
+            return resolve_exposure(candidate, advisories)
+
+        unit_plans = _plan_units(change_units(declarations), releases, exposure, tier, options, now, resolve_with)
+    return Analysis(trees, declarations, exposure, plans, unit_plans, available)
+
+
 def dry_run(
     path: Path,
     state_dir: Path,
@@ -146,31 +199,16 @@ def dry_run(
                 worktree_poms = [worktree / pom.relative_to(repo.root) for pom in reactor]
                 project_dir = worktree / repo.subdir if repo.subdir else worktree
                 jdk = resolve_jdk(load_project_settings(project_dir), jdks or catalog(), env)
+                tier = tier_status(store.latest_gate_result(repo.project_key), config, now, repo.base_sha)
                 try:
-                    trees = resolve_reactor(project_dir, worktree_poms, state_dir / "runs" / run_id / "logs" / "01-tree.log",
-                                            timeout, maven, isolated_env(jdk.build_env(env), env, temp))  # fmt: skip
+                    analysis = analyse(project_dir, worktree_poms, state_dir / "runs" / run_id / "logs", timeout, maven,
+                                       isolated_env(jdk.build_env(env), env, temp), sources, osv_snapshot, central_snapshot,
+                                       options, tier, now)  # fmt: skip
                 except ResolutionError:
                     stop = STOP_RESOLUTION_FAILED
                     raise
-                declarations = read_declarations(worktree_poms)
-                with contextlib.ExitStack() as stack:
-                    advisories = _open(stack, sources.advisories(osv_snapshot))
-                    releases = _open(stack, sources.metadata(central_snapshot)) if central_snapshot else None
-                    exposure = resolve_exposure(trees, advisories)
-                    available = {d.coordinate: releases.versions(d.coordinate) if releases else None for d in exposure.dependencies}
-                    plans = [plan_dependency(d, declarations.for_coordinate(d.coordinate), available[d.coordinate], advisories,
-                                             options, now) for d in exposure.dependencies]  # fmt: skip
-                    tier = tier_status(store.latest_gate_result(repo.project_key), config, now, repo.base_sha)
-                    logs, steps = state_dir / "runs" / run_id / "logs", itertools.count(2)
-
-                    def resolve_with(unit: ChangeUnit, version: str) -> TreeExposure:
-                        name = re.sub(r"[^\w.\-]", "_", f"{next(steps):02d}-{unit.kind}-{unit.coordinate.artifact_id}-{version}")
-                        with with_version(unit.site, version, expected=unit.version):
-                            candidate = resolve_reactor(project_dir, worktree_poms, logs / f"{name}.log", timeout, maven,
-                                                        isolated_env(jdk.build_env(env), env, temp))  # fmt: skip
-                        return resolve_exposure(candidate, advisories)
-
-                    unit_plans = _plan_units(change_units(declarations), releases, exposure, tier, options, now, resolve_with)
+                declarations, exposure, plans, unit_plans, available = (
+                    analysis.declarations, analysis.exposure, analysis.plans, analysis.unit_plans, analysis.available)  # fmt: skip
                 report = build_report(ReportInputs(
                     project=repo.project_dir.name, base_sha=repo.base_sha, run_id=run_id, worktree=worktree, generated_at=now,
                     config_version=config.version, options=options,
