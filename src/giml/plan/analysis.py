@@ -15,7 +15,7 @@ import json
 import os
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from giml import workspace
@@ -122,6 +122,7 @@ class Analysis:
     plans: list[DependencyPlan]  # one per resolved dependency, in exposure order
     unit_plans: list[UnitPlan]  # parent and BOM change units
     available: dict[Coordinate, list[VersionRelease] | None]  # Central versions per coordinate
+    version_advisories: dict[tuple[Coordinate, str], frozenset[str]] = field(default_factory=dict)  # `latest` only: advisories per version
 
 
 def analyse(
@@ -154,6 +155,7 @@ def analyse(
         releases = _open(stack, sources.metadata(central_snapshot)) if central_snapshot else None
         exposure = resolve_exposure(trees, advisories)
         available = {d.coordinate: releases.versions(d.coordinate) if releases else None for d in exposure.dependencies}
+        version_advisories = _version_advisories(exposure, available, advisories) if options.strategy == "latest" else {}
         plans = [plan_dependency(d, declarations.for_coordinate(d.coordinate), available[d.coordinate], advisories, options, now)
                  for d in exposure.dependencies]  # fmt: skip
 
@@ -164,7 +166,7 @@ def analyse(
             return resolve_exposure(candidate, advisories)
 
         unit_plans = _plan_units(change_units(declarations) if units else [], releases, exposure, tier, options, now, resolve_with)
-    return Analysis(trees, declarations, exposure, plans, unit_plans, available)
+    return Analysis(trees, declarations, exposure, plans, unit_plans, available, version_advisories)
 
 
 def dry_run(
@@ -232,6 +234,12 @@ def dry_run(
         json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         markdown_path.write_text(render_markdown(report), encoding="utf-8")
     return DryRun(run_id, report, json_path, markdown_path)
+
+
+def _version_advisories(exposure: TreeExposure, available, advisories) -> dict[tuple[Coordinate, str], frozenset[str]]:
+    """The advisories of every released version of every resolved dependency, so a ladder can skip versions that are worse."""
+    return {(d.coordinate, r.version): frozenset(f.advisory_id for f in advisories.affecting(d.coordinate, r.version))
+            for d in exposure.dependencies for r in available[d.coordinate] or []}
 
 
 def _open(stack: contextlib.ExitStack, source):

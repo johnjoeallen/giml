@@ -158,8 +158,12 @@ def _latest_steps(members: list[DependencyPlan], analysis: Analysis, options, no
             fixes = [c.version for c in member.candidates if c.clears and c.blocked is None and level(member.version, c.version) != "major"]
             if not fixes:
                 return None
-            floor = ComparableVersion(min(fixes, key=ComparableVersion))
-            pool = [v for v in pool if ComparableVersion(v) >= floor]
+            lowest = min(fixes, key=ComparableVersion)
+            allowed = analysis.version_advisories.get((member.coordinate, lowest), frozenset())
+            pool = [v for v in pool if ComparableVersion(v) >= ComparableVersion(lowest)]
+        else:
+            allowed = frozenset(member.advisories)  # a clean dependency stays clean: nothing new may come with an update
+        pool = [v for v in pool if analysis.version_advisories.get((member.coordinate, v), frozenset()) <= allowed]
         pools.append(set(pool))
     common = set.intersection(*pools)
     return [("latest_in_major", v) for v in sorted(common, key=ComparableVersion)] or None

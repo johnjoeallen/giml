@@ -327,3 +327,23 @@ def test_latest_general_scope_offers_the_newest_versions_of_other_dependencies(w
 def test_conservative_ladders_are_not_bisected(world):
     proposals = dependency_proposals(analysis(world), options(), world[0], NOW)
     assert not any(p.ladder.highest for p in proposals)
+
+
+def with_version_advisories(base, table):
+    import dataclasses
+
+    return dataclasses.replace(base, version_advisories={(Coordinate.parse(c), v): frozenset(ids) for (c, v), ids in table.items()})
+
+
+def test_latest_skips_versions_that_carry_advisories_the_fix_does_not(world):
+    opts = options(strategy="latest")
+    table = {("o:lib", "1.0.2"): [], ("o:lib", "1.0.3"): [], ("o:lib", "1.1.0"): ["GHSA-worse"]}
+    proposals = by_key(dependency_proposals(with_version_advisories(analysis(world, opts), table), opts, world[0], NOW))
+    assert [m.changes[0].version for m in proposals["dep:o:lib@1.0.0"].moves] == ["1.0.2", "1.0.3"]
+
+
+def test_latest_keeps_a_clean_dependency_clean(world):
+    opts = options(strategy="latest", scope="general")
+    table = {("o:clean", "1.0.1"): ["GHSA-new"]}
+    proposals = by_key(dependency_proposals(with_version_advisories(analysis(world, opts), table), opts, world[0], NOW))
+    assert "upd:o:clean@1.0.0" not in proposals
