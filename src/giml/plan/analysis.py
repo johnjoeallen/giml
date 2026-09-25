@@ -138,11 +138,13 @@ def analyse(
     tier: TierStatus,
     now: datetime.datetime,
     log_name: str = "01-tree.log",
+    units: bool = True,
 ) -> Analysis:
     """Resolve the reactor's trees, match them against the recorded snapshots and plan every dependency and change unit.
 
     Parent and BOM candidates are evaluated by writing each version into ``poms`` temporarily (restored
-    afterwards), so the worktree must be one nobody else is using. Raises ResolutionError.
+    afterwards), so the worktree must be one nobody else is using. ``units=False`` skips that evaluation
+    (a re-check of the exposure after changes does not need it). Raises ResolutionError.
     """
     trees = resolve_reactor(project_dir, poms, logs / log_name, timeout, maven, maven_env)
     declarations = read_declarations(poms)
@@ -161,7 +163,7 @@ def analyse(
                 candidate = resolve_reactor(project_dir, poms, logs / f"{name}.log", timeout, maven, maven_env)
             return resolve_exposure(candidate, advisories)
 
-        unit_plans = _plan_units(change_units(declarations), releases, exposure, tier, options, now, resolve_with)
+        unit_plans = _plan_units(change_units(declarations) if units else [], releases, exposure, tier, options, now, resolve_with)
     return Analysis(trees, declarations, exposure, plans, unit_plans, available)
 
 
