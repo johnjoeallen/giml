@@ -29,6 +29,7 @@ from giml.core.config import (
 from giml.gate.assess import JavaRunner, MavenRunner, PrerequisiteError, UnknownTierError, run_java
 from giml.gate.assess import assess as assess_project
 from giml.gate.reports import ReportError
+from giml.maven.isolation import InsufficientSpace
 from giml.maven.jdk import catalog
 from giml.maven.tree import ResolutionError
 from giml.maven.runner import MavenNotFound, run_maven
@@ -297,6 +298,7 @@ def main(argv: Sequence[str] | None = None, env: Environment | None = None) -> i
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.CONFIGURATION
     except (FetchError, MetadataError, GitError, BranchExistsError, ForeignWorktreeError, MavenNotFound,
-            ReportError, subprocess.TimeoutExpired, zipfile.BadZipFile, sqlite3.Error, OSError) as exc:  # fmt: skip
+            ReportError, InsufficientSpace, subprocess.TimeoutExpired, zipfile.BadZipFile, sqlite3.Error,
+            OSError) as exc:  # fmt: skip
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.INFRASTRUCTURE

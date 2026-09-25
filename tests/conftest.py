@@ -25,6 +25,14 @@ def isolated_home(tmp_path_factory, monkeypatch):
     return home
 
 
+@pytest.fixture(autouse=True)
+def roomy_disk(request, monkeypatch):
+    """A run checks the disk first (spec 9.2); tests must not depend on how full the machine running them is."""
+    if request.node.get_closest_marker("real_space_check"):
+        return
+    monkeypatch.setattr("giml.maven.isolation.check_space", lambda path: None)
+
+
 @dataclass
 class Route:
     body: bytes = b""

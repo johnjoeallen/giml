@@ -4,6 +4,7 @@ import json
 import pytest
 
 from giml.cli import Environment, ExitCode, main
+from giml.maven.isolation import InsufficientSpace
 from giml.store.sqlite_store import SqliteStateStore
 from tests.git.repo_helpers import fingerprint, git
 from tests.plan.test_analysis import NOW, SOURCES, CORE_POM, FakeMaven, assess_result, repo, snapshot  # noqa: F401
@@ -87,6 +88,15 @@ def test_missing_osv_snapshot_is_a_configuration_error(tmp_path, repo, capsys):
 def test_failed_resolution_is_a_configuration_error(state, repo, capsys):
     assert plan(state, repo, environment=env(FakeMaven(succeed=False))) == ExitCode.CONFIGURATION
     assert "giml: error: dependency resolution failed; see " in capsys.readouterr().err
+
+
+def test_a_full_disk_is_an_infrastructure_failure(state, repo, capsys, monkeypatch):
+    def full(path):
+        raise InsufficientSpace(f"{path}: only 10 inodes free on this filesystem, need 20000")
+
+    monkeypatch.setattr("giml.maven.isolation.check_space", full)
+    assert plan(state, repo) == ExitCode.INFRASTRUCTURE
+    assert "giml: error: " in capsys.readouterr().err
 
 
 def test_a_dirty_checkout_is_refused(state, repo, capsys):

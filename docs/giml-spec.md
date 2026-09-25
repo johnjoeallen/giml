@@ -503,6 +503,8 @@ Before any candidate, run the full pipeline on the **unmodified base commit**. I
 
 Each trial has its own working directory and (via section 12) its own database and port. Maven builds use the developer's own Maven settings and local repository (`~/.m2`), so they resolve from whatever repositories and mirrors the developer has configured, plus Maven's build cache where available. Only the application launched by the startup check (section 12.2) gets its own home and temp directory per trial. Parallel trials are supported up to a configured limit.
 
+**Run temp directory** (decided 2026-09-25). Tools write temporary files, and PIT kills a test JVM whenever a mutant times out, so its cleanup never runs: on a shared `/tmp` this once left over a thousand directories and used up the inodes, which failed unrelated builds. Every run therefore has its own temp directory, `<state>/runs/<run-id>/tmp`. Every Maven and `java` call gets `TMPDIR` and `JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=<dir>` (any options the developer already has are kept; `JAVA_TOOL_OPTIONS` reaches Surefire forks and PIT minions and leaves the project's own `argLine`, which JaCoCo sets, alone), and the directory is removed when the run ends, even on failure; what was left in it (entries and bytes) goes to the run's `logs/temp.log`. Before a run starts, giml checks the state directory's filesystem for at least 512 MB and 20,000 free inodes (inodes only where the filesystem counts them) and otherwise stops with an infrastructure failure (exit 4) that says which is short. A state directory path containing whitespace is refused, because `JAVA_TOOL_OPTIONS` splits on it.
+
 ---
 
 ## 10. Caching

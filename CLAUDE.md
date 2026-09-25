@@ -66,6 +66,7 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-25: M4 is under way (plan agreed in chat: run isolation, build stage runner with failure classes and error signatures, content-addressed cache with hit/miss metrics, baseline incl. the enforcer reference set and rewound baseline, outcome logging, checkpoint). Step 1 done: every run has its own temp directory via `TMPDIR` and `JAVA_TOOL_OPTIONS`, removed at the end, plus a free-space and inode check before a run (spec §9.2, `src/giml/maven/isolation.py`).
 - 2026-09-25: `planning.major_updates_test_scope` (`disallowed` default, or `allowed`): a major change in a dependency that only has test scope may pass the major-update gate, for a dependency's own fix and for majors through a parent/BOM (spec §8.7). Found on grip, where Boot 3.5.x (clearing 70 of 75 advisories) was blocked only by hamcrest 3.x. User choice, default strict.
 - 2026-09-25: Major updates are gated by `planning.major_updates`: `disallowed` (default), `allowed`, or `ml` (only with ML evidence that no developer code change is needed; behaves as `disallowed` until M8). Checked on the candidate's resolved tree before any build, so indirect majors (BOM, transitives) count; blocked candidates are recorded and reported (spec §8.7). Run-level setting only; repo files cannot loosen it. User instruction.
 - 2026-09-25: Planning is set by two independent options (spec §8): `strategy` `conservative` (default; patch, then minor, major only for CVE fixes) or `latest`, and `scope` `cve` (default; only CVE-affected dependencies move, others only when forced) or `general` (CVE first, then everything else). They replace the single `objective_profile` (`conservative_patch`/`latest_first`/`cve_first`) and apply to CVE fixes and general updates alike; CVEs are always settled first. Config keys `planning.strategy` and `planning.scope` (config version stays 3: `planning` never affects an assessment). User design.
@@ -117,6 +118,7 @@ Project-specific traps discovered while working (tool quirks, platform differenc
 - argparse help wraps to the terminal width; golden help tests pin `COLUMNS=100`.
 - Lombok 1.18.32 does not compile on JDK 25 (`cannot find symbol builder()`); chronograf needs JDK 17. A project failing only on the default JDK is a JDK choice problem, not a giml setup bug: compile a plain clone to tell them apart.
 - PIT runs every test class unless told otherwise, including Failsafe `*IT` tests that Surefire skips; giml's PIT block excludes them. PIT on arete takes about 11 minutes.
+- Tests must not depend on the disk: an autouse fixture stubs `giml.maven.isolation.check_space`; tests of the real check carry `@pytest.mark.real_space_check`.
 - Maven's `ComparableVersion` is not a total order on degenerate strings (`"" < A < 0A0 < ""`) and its canonical form is not always idempotent (`0.alpha-ga -> 0.alpha -> alpha`). The port reproduces both; never assume sort stability on junk versions.
 
 ## Open CONFIRM items

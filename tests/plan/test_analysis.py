@@ -9,6 +9,7 @@ from giml.core.config import PlanningSettings, default_gate_config_path, load_ga
 from giml.core.model import Coordinate, Finding, GateResultRecord, ProjectRecord, RunRecord, Severity, SeverityRating
 from giml.core.model import SeveritySource, SnapshotInfo, VersionRelease
 from giml.git.preflight import PreflightRefusal, preflight
+from giml.maven.isolation import InsufficientSpace
 from giml.maven.jdk import JdkCatalog
 from giml.maven.runner import MavenResult
 from giml.maven.tree import ResolutionError
@@ -169,7 +170,9 @@ def test_maven_is_asked_only_for_the_dependency_trees(repo, tmp_path, store):
     maven = FakeMaven()
     run(repo, tmp_path, store, maven=maven)
     (project, args, env), = maven.calls
-    assert args[0].endswith(":tree") and "-DoutputType=json" in args and env is None
+    assert args[0].endswith(":tree") and "-DoutputType=json" in args
+    tmp = tmp_path / "state" / "runs" / next((tmp_path / "state" / "runs").iterdir()).name / "tmp"
+    assert env["TMPDIR"] == str(tmp) and env["JAVA_TOOL_OPTIONS"] == f"-Djava.io.tmpdir={tmp}" and not tmp.exists()
     assert project.name.endswith("-trial-0") and not project.exists()
 
 
@@ -181,7 +184,8 @@ def test_the_projects_jdk_is_used_for_resolution(repo, tmp_path, store):
     git(repo, "commit", "-q", "-m", "settings")
     maven = FakeMaven()
     result = run(repo, tmp_path, store, maven=maven, jdks=make_catalog(tmp_path, [home]), environ={"PATH": "/usr/bin"})
-    assert maven.calls[0][2] == {"PATH": f"{home / 'bin'}:/usr/bin", "JAVA_HOME": str(home)}
+    env = maven.calls[0][2]
+    assert (env["PATH"], env["JAVA_HOME"]) == (f"{home / 'bin'}:/usr/bin", str(home))
     assert result.report["jdk"] == {"version": "17.0.16", "home": str(home), "source": "global config"}
 
 
@@ -235,6 +239,17 @@ def test_a_failed_resolution_is_reported_and_leaves_nothing_behind(repo, tmp_pat
         run(repo, tmp_path, store, maven=FakeMaven(succeed=False))
     (run_record,) = [r for r in store.list_runs() if r.kind == "plan"]
     assert run_record.stop_reason == "resolution_failed" and not run_record.worktree_path.exists()
+    assert git(repo, "worktree", "list").count("\n") == 0
+
+
+def test_a_full_disk_stops_the_dry_run_early(repo, tmp_path, store, monkeypatch):
+    def full(path):
+        raise InsufficientSpace(f"{path}: only 10 MB free on this filesystem, need 512 MB")
+
+    monkeypatch.setattr("giml.maven.isolation.check_space", full)
+    with pytest.raises(InsufficientSpace, match="only 10 MB free"):
+        run(repo, tmp_path, store)
+    assert [(r.kind, r.stop_reason) for r in store.list_runs()] == [("plan", "setup_failed")]
     assert git(repo, "worktree", "list").count("\n") == 0
 
 

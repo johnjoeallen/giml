@@ -29,6 +29,7 @@ from giml.git.lock import ProjectLock
 from giml.git.preflight import preflight
 from giml.git.worktrees import WorktreeManager
 from giml.maven.declarations import read_declarations
+from giml.maven.isolation import isolated_env, run_temp
 from giml.maven.jdk import JdkCatalog, catalog, resolve_jdk
 from giml.maven.project import discover_reactor
 from giml.maven.runner import MavenRunner, run_maven
@@ -137,49 +138,50 @@ def dry_run(
         store.start_run(RunRecord(run_id, repo.project_key, repo.base_sha, "", manager.root / f"{run_id}-trial-0", now))
         stop, worktree = workspace.STOP_SETUP_FAILED, None
         try:
-            osv_snapshot, central_snapshot = store.latest_snapshot(osv.SOURCE), store.latest_snapshot(central.SOURCE)
-            if osv_snapshot is None:
-                raise MissingSnapshotError("no OSV snapshot; run `giml sync`")
-            worktree = manager.create_trial(repo.base_sha, 0)
-            worktree_poms = [worktree / pom.relative_to(repo.root) for pom in reactor]
-            project_dir = worktree / repo.subdir if repo.subdir else worktree
-            jdk = resolve_jdk(load_project_settings(project_dir), jdks or catalog(), env)
-            try:
-                trees = resolve_reactor(project_dir, worktree_poms, state_dir / "runs" / run_id / "logs" / "01-tree.log",
-                                        timeout, maven, jdk.build_env(env))  # fmt: skip
-            except ResolutionError:
-                stop = STOP_RESOLUTION_FAILED
-                raise
-            declarations = read_declarations(worktree_poms)
-            with contextlib.ExitStack() as stack:
-                advisories = _open(stack, sources.advisories(osv_snapshot))
-                releases = _open(stack, sources.metadata(central_snapshot)) if central_snapshot else None
-                exposure = resolve_exposure(trees, advisories)
-                available = {d.coordinate: releases.versions(d.coordinate) if releases else None for d in exposure.dependencies}
-                plans = [plan_dependency(d, declarations.for_coordinate(d.coordinate), available[d.coordinate], advisories,
-                                         options, now) for d in exposure.dependencies]  # fmt: skip
-                tier = tier_status(store.latest_gate_result(repo.project_key), config, now, repo.base_sha)
-                logs, steps = state_dir / "runs" / run_id / "logs", itertools.count(2)
+            with run_temp(state_dir, run_id, log_path=state_dir / "runs" / run_id / "logs" / "temp.log") as temp:
+                osv_snapshot, central_snapshot = store.latest_snapshot(osv.SOURCE), store.latest_snapshot(central.SOURCE)
+                if osv_snapshot is None:
+                    raise MissingSnapshotError("no OSV snapshot; run `giml sync`")
+                worktree = manager.create_trial(repo.base_sha, 0)
+                worktree_poms = [worktree / pom.relative_to(repo.root) for pom in reactor]
+                project_dir = worktree / repo.subdir if repo.subdir else worktree
+                jdk = resolve_jdk(load_project_settings(project_dir), jdks or catalog(), env)
+                try:
+                    trees = resolve_reactor(project_dir, worktree_poms, state_dir / "runs" / run_id / "logs" / "01-tree.log",
+                                            timeout, maven, isolated_env(jdk.build_env(env), env, temp))  # fmt: skip
+                except ResolutionError:
+                    stop = STOP_RESOLUTION_FAILED
+                    raise
+                declarations = read_declarations(worktree_poms)
+                with contextlib.ExitStack() as stack:
+                    advisories = _open(stack, sources.advisories(osv_snapshot))
+                    releases = _open(stack, sources.metadata(central_snapshot)) if central_snapshot else None
+                    exposure = resolve_exposure(trees, advisories)
+                    available = {d.coordinate: releases.versions(d.coordinate) if releases else None for d in exposure.dependencies}
+                    plans = [plan_dependency(d, declarations.for_coordinate(d.coordinate), available[d.coordinate], advisories,
+                                             options, now) for d in exposure.dependencies]  # fmt: skip
+                    tier = tier_status(store.latest_gate_result(repo.project_key), config, now, repo.base_sha)
+                    logs, steps = state_dir / "runs" / run_id / "logs", itertools.count(2)
 
-                def resolve_with(unit: ChangeUnit, version: str) -> TreeExposure:
-                    name = re.sub(r"[^\w.\-]", "_", f"{next(steps):02d}-{unit.kind}-{unit.coordinate.artifact_id}-{version}")
-                    with with_version(unit.site, version, expected=unit.version):
-                        candidate = resolve_reactor(project_dir, worktree_poms, logs / f"{name}.log", timeout, maven,
-                                                    jdk.build_env(env))  # fmt: skip
-                    return resolve_exposure(candidate, advisories)
+                    def resolve_with(unit: ChangeUnit, version: str) -> TreeExposure:
+                        name = re.sub(r"[^\w.\-]", "_", f"{next(steps):02d}-{unit.kind}-{unit.coordinate.artifact_id}-{version}")
+                        with with_version(unit.site, version, expected=unit.version):
+                            candidate = resolve_reactor(project_dir, worktree_poms, logs / f"{name}.log", timeout, maven,
+                                                        isolated_env(jdk.build_env(env), env, temp))  # fmt: skip
+                        return resolve_exposure(candidate, advisories)
 
-                unit_plans = _plan_units(change_units(declarations), releases, exposure, tier, options, now, resolve_with)
-            report = build_report(ReportInputs(
-                project=repo.project_dir.name, base_sha=repo.base_sha, run_id=run_id, worktree=worktree, generated_at=now,
-                config_version=config.version, options=options,
-                tier=tier,
-                snapshots={"osv": osv_snapshot.id, "central": central_snapshot.id if central_snapshot else None},
-                jdk=jdk.record(), exposure=exposure, plans=plans,
-                latest_available={c: newest_release(v) for c, v in available.items()},
-                parents=declarations.parents, skipped=declarations.skipped, units=unit_plans,
-                warnings=_snapshot_warnings({"osv": osv_snapshot, "central": central_snapshot}, options.max_snapshot_age_days, now),
-            ))  # fmt: skip
-            stop = STOP_DRY_RUN
+                    unit_plans = _plan_units(change_units(declarations), releases, exposure, tier, options, now, resolve_with)
+                report = build_report(ReportInputs(
+                    project=repo.project_dir.name, base_sha=repo.base_sha, run_id=run_id, worktree=worktree, generated_at=now,
+                    config_version=config.version, options=options,
+                    tier=tier,
+                    snapshots={"osv": osv_snapshot.id, "central": central_snapshot.id if central_snapshot else None},
+                    jdk=jdk.record(), exposure=exposure, plans=plans,
+                    latest_available={c: newest_release(v) for c, v in available.items()},
+                    parents=declarations.parents, skipped=declarations.skipped, units=unit_plans,
+                    warnings=_snapshot_warnings({"osv": osv_snapshot, "central": central_snapshot}, options.max_snapshot_age_days, now),
+                ))  # fmt: skip
+                stop = STOP_DRY_RUN
         finally:
             if worktree is not None and worktree.exists():
                 manager.remove(worktree)

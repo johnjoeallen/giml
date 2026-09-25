@@ -52,3 +52,8 @@ def test_real_assessment_of_the_mini_reactor(tmp_path, real_home):
     assert result["enforcer"]["status"] == "passed"
     assert git(outcome.worktree, "diff", "--name-only", "HEAD~1..HEAD") == "pom.xml"
     assert fingerprint(repo) == before
+    # every JVM Maven started used the run's own temp directory, which is gone now
+    run_dir = tmp_path / "state" / "runs" / outcome.run_id
+    assert not (run_dir / "tmp").exists() and (run_dir / "logs" / "temp.log").read_text().startswith("removed ")
+    logs = "".join(p.read_text(errors="replace") for p in (run_dir / "logs").glob("*.log"))
+    assert f"-Djava.io.tmpdir={run_dir / 'tmp'}" in logs  # the JVMs announce JAVA_TOOL_OPTIONS on stderr

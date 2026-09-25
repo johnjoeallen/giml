@@ -26,6 +26,7 @@ from giml.gate.tiers import Metrics, earned_tier, misses
 from giml.git.lock import ProjectLock
 from giml.git.preflight import RepoState, preflight
 from giml.git.worktrees import WorktreeManager, require_identity
+from giml.maven.isolation import RunTemp, isolated_env, run_temp
 from giml.maven.jdk import JdkCatalog, catalog, resolve_jdk
 from giml.maven.project import discover_reactor
 from giml.maven.runner import Env, MavenResult, MavenRunner, run_maven
@@ -168,10 +169,11 @@ def assess(
                                   kind="assess"))  # fmt: skip
         stop = workspace.STOP_SETUP_FAILED
         try:
-            worktree = manager.create_result(branch)
-            result = _measure(repo, reactor, worktree, state_dir, run_id, now, config, declared_tier,
-                              maven_timeout, maven, java, jdks or catalog(),
-                              os.environ if environ is None else environ)  # fmt: skip
+            with run_temp(state_dir, run_id, log_path=state_dir / "runs" / run_id / "logs" / "temp.log") as temp:
+                worktree = manager.create_result(branch)
+                result = _measure(repo, reactor, worktree, state_dir, run_id, now, config, declared_tier,
+                                  maven_timeout, maven, java, jdks or catalog(),
+                                  os.environ if environ is None else environ, temp)  # fmt: skip
             stop = STOP_ASSESSED
         except PrerequisiteError:
             stop = STOP_TESTS_FAILED
@@ -190,7 +192,7 @@ def assess(
 
 def _measure(repo: RepoState, reactor: list[Path], worktree: Path, state_dir: Path, run_id: str,
              now: datetime.datetime, config: GateConfig, declared_tier: str | None, timeout: float,
-             maven: MavenRunner, java: JavaRunner, jdks: JdkCatalog, environ: Mapping[str, str]) -> dict:  # fmt: skip
+             maven: MavenRunner, java: JavaRunner, jdks: JdkCatalog, environ: Mapping[str, str], temp: RunTemp) -> dict:  # fmt: skip
     worktree_reactor = [worktree / pom.relative_to(repo.root) for pom in reactor]
     setup: SetupResult = apply_setup(worktree, worktree_reactor)
     facts = [module_facts(pom) for pom in worktree_reactor]
@@ -198,7 +200,7 @@ def _measure(repo: RepoState, reactor: list[Path], worktree: Path, state_dir: Pa
     jdk = resolve_jdk(load_project_settings(project_dir), jdks, environ)
     run_dir = state_dir / "runs" / run_id
     session = _Session(project_dir, run_dir / "logs", state_dir / "tools", maven, java, timeout,
-                       jdk.build_env(environ))  # fmt: skip
+                       isolated_env(jdk.build_env(environ), environ, temp))  # fmt: skip
 
     first = session.mvn("test", ["test", "-Denforcer.skip=true"])
     if not first.succeeded:

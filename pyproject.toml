@@ -34,6 +34,7 @@ testpaths = ["tests"]
 addopts = "-m 'not slow' --strict-markers --import-mode=importlib"
 markers = [
     "slow: long-running or external-tool tests; run with `pytest -m slow`",
+    "real_space_check: run the real free-space check instead of the roomy-disk stub (spec 9.2)",
 ]
 
 [tool.coverage.run]

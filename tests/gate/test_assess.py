@@ -14,6 +14,7 @@ import pytest
 from giml.cli import Environment, ExitCode, main
 from giml.core.config import ConfigError, default_gate_config_path, load_gate_config
 from giml.gate.assess import PrerequisiteError, UnknownTierError, assess, run_java
+from giml.maven.isolation import InsufficientSpace
 from giml.maven.runner import MavenResult
 from giml.store.sqlite_store import SqliteStateStore
 from tests.git.repo_helpers import fingerprint, git, make_repo
@@ -118,7 +119,12 @@ def test_full_assessment_of_the_mini_reactor(repo, tmp_path):
     assert len(result["tooling_added"]) == 3 and result["setup_commit"]
     assert result["config_version"] == 3 and result["declared_tier"] == "B"
     assert result["tools"]["jdk"] == {"version": None, "home": None, "source": "inherited"}
-    assert set(maven.envs) == {None}
+    run_id = outcome.run_id
+    tmp = tmp_path / "state" / "runs" / run_id / "tmp"
+    assert maven.envs and all(env["TMPDIR"] == str(tmp) and env["JAVA_TOOL_OPTIONS"] == f"-Djava.io.tmpdir={tmp}"
+                              for env in maven.envs)  # fmt: skip
+    assert not tmp.exists()  # removed when the run ended
+    assert (tmp_path / "state" / "runs" / run_id / "logs" / "temp.log").read_text().startswith(f"removed {tmp}: ")
     assert result["expires"] == "2026-10-24T12:00:00+00:00"
 
     assert outcome.branch == f"giml/assess/{git(repo, 'rev-parse', 'HEAD')[:7]}/20260924T120000Z"
@@ -130,6 +136,24 @@ def test_full_assessment_of_the_mini_reactor(repo, tmp_path):
     assert len(test_runs) == CONFIG.shared.flake_check_runs
     assert all("-Denforcer.skip=true" in c for c in test_runs)
     assert fingerprint(repo) == before
+
+
+def test_a_full_disk_stops_the_assessment_before_anything_is_created(repo, tmp_path, monkeypatch):
+    def full(path):
+        raise InsufficientSpace(f"{path}: only 10 inodes free on this filesystem, need 20000")
+
+    monkeypatch.setattr("giml.maven.isolation.check_space", full)
+    with pytest.raises(InsufficientSpace, match="only 10 inodes free"):
+        run(repo, tmp_path)
+    with SqliteStateStore(tmp_path / "state" / "state.db") as store:
+        assert [(r.kind, r.stop_reason) for r in store.list_runs()] == [("assess", "setup_failed")]
+    assert git(repo, "worktree", "list").count("\n") == 0 and not list((tmp_path / "state" / "runs").glob("*/tmp"))
+
+
+def test_the_run_temp_is_removed_when_the_assessment_fails(repo, tmp_path):
+    with pytest.raises(PrerequisiteError):
+        run(repo, tmp_path, FakeMaven(fail_on={"test"}))
+    assert not list((tmp_path / "state" / "runs").glob("*/tmp"))
 
 
 def test_flaky_test_is_reported(repo, tmp_path):
@@ -226,9 +250,9 @@ def test_project_settings_choose_the_jdk_for_maven_and_java(repo, tmp_path):
     outcome, _, _ = run(repo, tmp_path, maven, jdks=make_catalog(tmp_path, [tmp_path / "jdks" / "21", home]),
                         environ={"PATH": "/usr/bin", "JAVA_HOME": "/elsewhere"})  # fmt: skip
     assert outcome.result["tools"]["jdk"] == {"version": "17.0.16", "home": str(home), "source": "global config"}
-    expected = {"PATH": f"{home / 'bin'}:/usr/bin", "JAVA_HOME": str(home)}
-    assert maven.envs and all(env == expected for env in maven.envs)
-    assert fake_java.envs == [expected]
+    assert maven.envs and all(env["PATH"] == f"{home / 'bin'}:/usr/bin" and env["JAVA_HOME"] == str(home) for env in maven.envs)
+    (java_env,) = fake_java.envs
+    assert (java_env["PATH"], java_env["JAVA_HOME"]) == (f"{home / 'bin'}:/usr/bin", str(home)) and "TMPDIR" in java_env
 
 
 def test_settings_are_read_from_the_base_commit_not_the_checkout(repo, tmp_path):
