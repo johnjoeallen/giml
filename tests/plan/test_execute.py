@@ -47,6 +47,9 @@ class FakeTrial:
     def __init__(self, poison=()):
         self.poison, self.calls = poison, []
 
+    def refresh_reference(self):
+        self.refreshed = getattr(self, "refreshed", 0) + 1
+
     def verify(self, changes):
         self.calls.append(changes)
         versions = {getattr(c, "version", None) for c in changes}
@@ -155,3 +158,9 @@ def test_the_naive_baseline_is_every_first_step_verified_together(repo, world):
 
 def test_the_naive_baseline_passes_when_nothing_conflicts(repo, world):
     assert run(repo, world, FakeTrial()).naive.passed is True
+
+
+def test_the_reference_is_refreshed_after_each_phase_that_committed(repo, world):
+    trial = FakeTrial()
+    run(repo, world, trial)
+    assert trial.refreshed == 1

@@ -254,3 +254,20 @@ def test_a_project_in_a_subdirectory_is_built_where_it_lives(world, tmp_path):
     stages = Stages()
     TrialRunner(manager, result, "sub", stages, baseline, 60).verify([])
     assert all(call[0].name == "sub" for call in stages.calls)
+
+
+def test_after_commits_the_reference_becomes_the_result_worktrees_own_violations(world):
+    baseline = reference_baseline(world, CONVERGENCE, OTHER)
+    stages = Stages(lambda stage, wt: failed("enforcer", ENFORCER_CONVERGENCE, violations=[OTHER]) if stage == "enforcer" else ok(stage))
+    trial_runner = runner(world, stages, baseline)
+    assert trial_runner.refresh_reference() == (OTHER,) and stages.stages == ["enforcer"]
+    again = Stages(lambda stage, wt: failed("enforcer", ENFORCER_CONVERGENCE, violations=[CONVERGENCE, OTHER]) if stage == "enforcer" else ok(stage))
+    trial_runner.runner = again
+    assert trial_runner.verify([bump(world[2])]).new_violations == (CONVERGENCE,)  # a resolved violation may not come back
+
+
+def test_the_reference_is_kept_when_the_enforcer_is_not_an_oracle(world):
+    unusable = verify_baseline(Scripted(compile=ok("compile"), unit_test=ok("unit_test"),
+                                        enforcer=failed("enforcer", "resolution")), world[2], 60)  # fmt: skip
+    stages = Stages()
+    assert runner(world, stages, unusable).refresh_reference() == () and stages.stages == []

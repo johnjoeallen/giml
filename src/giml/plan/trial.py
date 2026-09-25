@@ -71,6 +71,7 @@ class TrialRunner:
         self.manager, self.result_worktree, self.subdir = manager, result_worktree, project_subdir
         self.runner, self.baseline, self.timeout, self.retries = runner, baseline, timeout_seconds, retries
         self._trials = 0
+        self.reference = baseline.reference_violations  # what a candidate may keep; shrinks as commits resolve violations
 
     def _stages(self) -> list[str]:
         oracle = self.baseline.oracle_stages
@@ -81,6 +82,16 @@ class TrialRunner:
         while outcome.retryable and attempts <= self.retries:
             outcome, attempts = self.runner.run_stage(project, stage, self.timeout), attempts + 1
         return outcome
+
+    def refresh_reference(self) -> tuple[Violation, ...]:
+        """After commits: the result worktree's own violations become the reference (a resolved one may not come back)."""
+        if self.baseline.enforcer_mode not in ("clean", "reference"):
+            return self.reference
+        project = self.result_worktree / self.subdir if self.subdir else self.result_worktree
+        outcome = self._run(project, "enforcer")
+        if not outcome.retryable and (outcome.passed or outcome.violations):
+            self.reference = outcome.violations
+        return self.reference
 
     def verify(self, changes: Sequence[Change]) -> TrialResult:
         """Apply ``changes`` to a trial worktree at the result branch's tip and run the stages there."""
@@ -102,7 +113,7 @@ class TrialRunner:
             if outcome.retryable:
                 return TrialResult(False, True, stage, outcome.failure, tuple(outcomes), (), ())
             if stage == "enforcer":
-                reference = self.baseline.reference_violations
+                reference = self.reference
                 new = new_violations(reference, outcome.violations)
                 resolved = resolved_violations(reference, outcome.violations)
                 if new:

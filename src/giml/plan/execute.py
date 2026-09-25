@@ -143,6 +143,8 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
         if proposals and kind == "dependency":
             naive.append(_naive(proposals, trial))
         committed.extend(_commit_steps(outcome.accepted, by_key, root, tier, run_id))
+        if outcome.accepted:
+            trial.refresh_reference()
         left.extend(_lefts(outcome, by_key))
         if outcome.stop_reason != "complete":
             stop, detail = outcome.stop_reason, outcome.stop_detail
