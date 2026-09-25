@@ -235,9 +235,9 @@ def test_autonomy_for_an_undefined_tier_is_rejected():
 
 def test_verification_stages_can_be_switched_off():
     data = default_data()
-    data["verification"] = {"integration_tests": "off", "startup_check": "off"}
+    data["verification"] = {"integration_tests": "off", "startup_check": "off", "pit": "off"}
     config = parse(data)
-    assert (config.verification.integration_tests, config.verification.startup_check) == ("off", "off")
+    assert (config.verification.integration_tests, config.verification.startup_check, config.verification.pit) == ("off", "off", "off")
 
 
 def write(path, text):

@@ -7,8 +7,9 @@ touched. Only stages that passed at the baseline are oracles. The enforcer is ju
 baseline's reference set: a candidate fails on a violation the baseline did not have, tolerates the
 ones it had, and the ones it removes are reported as resolved (a goal, spec 8.5).
 
-Stage order is compile, enforcer, unit tests: the enforcer is cheap and deterministic, so a candidate
-that adds a violation is stopped before minutes of tests are spent on it.
+Stage order is a vulnerability check on the resolved tree (no build), compile, enforcer, unit tests, integration tests
+(where BDD suites usually run) and PIT: a stage is only run for a candidate that passed the cheaper ones before it, and
+PIT must keep the mutation scores the project earned (or the baseline's, when lower).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable, Sequence
@@ -25,13 +27,14 @@ from giml.git.runner import Git
 from giml.git.worktrees import WorktreeManager
 from giml.maven.build import StageOutcome
 from giml.maven.enforcer import Violation, new_violations, resolved_violations
-from giml.maven.failures import DUPLICATE_CLASSES, ENFORCER_CONVERGENCE, RESOLUTION, VULNERABILITY_WORSE, Failure
+from giml.gate.reports import Mutations
+from giml.maven.failures import (DUPLICATE_CLASSES, ENFORCER_CONVERGENCE, MUTATION_DROPPED, RESOLUTION, VULNERABILITY_WORSE, Failure)
 from giml.maven.pom_change import Change, apply_changes, rebase
 from giml.maven.tree import ResolutionError
 from giml.plan.baseline import Baseline
 from giml.plan.exposure import TreeExposure, worse_exposure
 
-TRIAL_ORDER = ("compile", "enforcer", "unit_test")
+TRIAL_ORDER = ("compile", "enforcer", "unit_test", "integration", "pit")  # cheap and decisive first; PIT is the slowest
 _CONVERGENCE_RULES = frozenset({"DependencyConvergence", "BanDuplicatePomDependencyVersions"})
 _MAX_LINES = 8
 
@@ -84,6 +87,7 @@ class TrialRunner:
         self.runner, self.baseline, self.timeout, self.retries = runner, baseline, timeout_seconds, retries
         self._trials = 0
         self.resolve_exposure = resolve_exposure
+        self.pit_floors: tuple[float, float] | None = None  # (mutation coverage, test strength) a PIT run must reach
         self.exposure_reference: TreeExposure | None = None  # the tip's exposure: a candidate may not be worse than this
         self.reference = baseline.reference_violations  # what a candidate may keep; shrinks as commits resolve violations
 
@@ -117,6 +121,17 @@ class TrialRunner:
             return self._stages_in(trial / self.subdir if self.subdir else trial)
         finally:
             self.manager.remove(trial)
+
+    def _pit_shortfall(self, outcome: StageOutcome) -> tuple[str, ...]:
+        """Why a PIT run that finished is still a failure: too few mutants, or a score below its floor."""
+        if self.pit_floors is None:
+            return ()
+        mutations = Mutations(Counter((outcome.details or {}).get("mutations", {})))
+        scores = (("mutation coverage", mutations.mutation_coverage, self.pit_floors[0]),
+                  ("test strength", mutations.test_strength, self.pit_floors[1]))  # fmt: skip
+        if mutations.total == 0:
+            return ("PIT produced no mutations",)
+        return tuple(f"{name} {score:.1f} is below {floor:.1f}" for name, score, floor in scores if score is not None and score < floor)
 
     def _exposure_stage(self, project: Path) -> StageOutcome | None:
         """A candidate that makes the vulnerabilities worse fails like a broken build, without one being run."""
@@ -153,4 +168,6 @@ class TrialRunner:
                     return TrialResult(False, False, stage, outcome.failure, tuple(outcomes), (), ())
             elif not outcome.passed:
                 return TrialResult(False, False, stage, outcome.failure, tuple(outcomes), (), resolved)
+            elif stage == "pit" and (lines := self._pit_shortfall(outcome)):
+                return TrialResult(False, False, stage, _digest(MUTATION_DROPPED, lines), tuple(outcomes), (), resolved)
         return TrialResult(True, False, None, None, tuple(outcomes), (), resolved)

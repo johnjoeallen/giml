@@ -311,3 +311,42 @@ def test_a_tree_that_cannot_be_resolved_fails_as_resolution(world):
     outcome = trial_runner.verify([bump(world[2])])
     assert (outcome.failed_stage, outcome.failure.failure_class) == ("exposure", "resolution")
     assert "<project>" in outcome.failure.key_lines[0]
+
+
+def pit_outcome(**counts):
+    return StageOutcome("pit", True, 5.0, LOG, None, details={"mutations": counts})
+
+
+def pit_baseline(world):
+    scripted = Scripted(compile=ok("compile"), unit_test=ok("unit_test"), enforcer=ok("enforcer"), pit=pit_outcome(KILLED=9, SURVIVED=1))
+    return verify_baseline(scripted, world[2], 60, stages_to_run=("compile", "unit_test", "enforcer", "pit"))
+
+
+def pit_stages(**counts):
+    return Stages(lambda stage, wt: pit_outcome(**counts) if stage == "pit" else ok(stage))
+
+
+def test_pit_runs_last_and_a_candidate_that_keeps_the_scores_passes(world):
+    stages = pit_stages(KILLED=9, SURVIVED=1)
+    trial_runner = runner(world, stages, pit_baseline(world))
+    trial_runner.pit_floors = (80.0, 85.0)
+    assert trial_runner.verify([bump(world[2])]).passed
+    assert stages.stages == ["compile", "enforcer", "unit_test", "pit"]
+
+
+def test_a_candidate_whose_mutation_scores_fall_below_the_floor_fails_after_its_tests_passed(world):
+    trial_runner = runner(world, pit_stages(KILLED=7, SURVIVED=3), pit_baseline(world))
+    trial_runner.pit_floors = (80.0, 85.0)
+    outcome = trial_runner.verify([bump(world[2])])
+    assert (outcome.passed, outcome.failed_stage, outcome.failure.failure_class) == (False, "pit", "mutation_score_dropped")
+    assert outcome.failure.key_lines == ("mutation coverage 70.0 is below 80.0", "test strength 70.0 is below 85.0")
+
+
+def test_pit_that_finds_no_mutants_is_a_failure_not_a_pass(world):
+    trial_runner = runner(world, pit_stages(), pit_baseline(world))
+    trial_runner.pit_floors = (80.0, 85.0)
+    assert trial_runner.verify([bump(world[2])]).failure.key_lines == ("PIT produced no mutations",)
+
+
+def test_without_floors_pit_only_has_to_run(world):
+    assert runner(world, pit_stages(KILLED=1, SURVIVED=9), pit_baseline(world)).verify([bump(world[2])]).passed

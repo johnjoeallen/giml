@@ -11,12 +11,14 @@ from __future__ import annotations
 import datetime
 import itertools
 import json
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from giml.core.config import GateConfig, PlanningSettings
 from giml.data import central, osv
+from giml.gate.reports import Mutations
 from giml.git.worktrees import WorktreeManager
 from giml.maven.enforcer import Violation
 from giml.maven.project import discover_reactor
@@ -50,6 +52,16 @@ class PlanRun:
     @property
     def succeeded(self) -> bool:
         return self.outcome is not None and bool(self.outcome.committed) and self.enforcer_clean
+
+
+def pit_floors(baseline, tier) -> tuple[float, float] | None:
+    """What a candidate's PIT run must reach: the earned tier's thresholds, or the baseline's own scores when they are lower."""
+    if baseline.pit_mutations is None or tier is None:
+        return None
+    measured = Mutations(Counter(baseline.pit_mutations))
+    coverage, strength = measured.mutation_coverage, measured.test_strength
+    return (min(tier.pit_mutation_coverage, coverage if coverage is not None else 0.0),
+            min(tier.pit_test_strength, strength if strength is not None else 0.0))  # fmt: skip
 
 
 def _final_violations(baseline_run: BaselineRun, project_dir: Path, committed: bool) -> tuple[Violation, ...]:
@@ -93,6 +105,7 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
     if tier.usable:
         trial = TrialRunner(WorktreeManager(ws.repo, state_dir, ws.run_id), ws.worktree, ws.repo.subdir or "", baseline_run.runner,
                             baseline_run.baseline, MAVEN_TIMEOUT_SECONDS, resolve_exposure=trial_exposure)  # fmt: skip
+        trial.pit_floors = pit_floors(baseline_run.baseline, config.tiers.get(tier.earned or ""))
         outcome = execute(ws.worktree, ws.run_id, tier.earned or "", first, reanalyse, trial, options, clock, project_dir / "pom.xml")
         for record in deferral_records(outcome, ws.repo.project_key, ws.run_id, clock()):
             store.save_deferral(record)

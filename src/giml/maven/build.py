@@ -8,12 +8,16 @@ passed and, if not, what kind of failure it was.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from giml.gate.modules import module_facts
+from giml.gate.reports import read_pit
 from giml.maven.enforcer import Violation, parse_enforcer
 from giml.maven.failures import INFRASTRUCTURE, Failure, classify
+from giml.maven.project import discover_reactor
 from giml.maven.runner import Env, MavenRunner
 
 # The enforcer is skipped where it is not the stage under test, so a candidate is not blamed for a
@@ -22,6 +26,10 @@ STAGES: dict[str, tuple[str, ...]] = {
     "compile": ("test-compile", "-Denforcer.skip=true"),
     "unit_test": ("test", "-Denforcer.skip=true"),
     "enforcer": ("validate",),
+    # Failsafe-style tests (BDD suites usually run here): no unit tests again, so the stage isolates the integration ones.
+    "integration": ("verify", "-Denforcer.skip=true", "-Dtest=NoSuchTest", "-Dsurefire.failIfNoSpecifiedTests=false",
+                    "-DfailIfNoTests=false"),
+    "pit": ("test-compile", "org.pitest:pitest-maven:mutationCoverage", "-Denforcer.skip=true", "-DtimestampedReports=false"),
 }
 
 
@@ -55,6 +63,16 @@ class StageOutcome:
         return self.failure_class == INFRASTRUCTURE
 
 
+def pit_mutations(project: Path) -> dict[str, int]:
+    """PIT's mutation outcomes (status to count) summed over every module's report of the reactor."""
+    total: Counter = Counter()
+    for pom in discover_reactor(project):
+        report = module_facts(pom).pit_report
+        if report.is_file():
+            total += read_pit(report).statuses
+    return dict(total)
+
+
 class MavenBuildRunner:
     def __init__(self, maven: MavenRunner, env: Env, logs_dir: Path) -> None:
         self.maven, self.env, self.logs_dir = maven, env, logs_dir
@@ -67,8 +85,8 @@ class MavenBuildRunner:
         log = self.logs_dir / f"{self._runs:02d}-{stage}.log"
         result = self.maven(worktree, list(STAGES[stage]), log, timeout_seconds, self.env)
         if result.succeeded:
-            return StageOutcome(stage, True, result.duration_seconds, result.log_path, None,
-                                details={"violations": []} if stage == "enforcer" else None)  # fmt: skip
+            details = {"violations": []} if stage == "enforcer" else {"mutations": pit_mutations(worktree)} if stage == "pit" else None
+            return StageOutcome(stage, True, result.duration_seconds, result.log_path, None, details=details)
         text = result.log_path.read_text(encoding="utf-8", errors="replace")
         details = {"violations": [v.to_dict() for v in parse_enforcer(text)]} if stage == "enforcer" else None
         return StageOutcome(stage, False, result.duration_seconds, result.log_path, classify(text, result.timed_out),

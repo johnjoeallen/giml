@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from giml.core.config import GateConfig, load_project_settings
+from giml.gate.modules import declares_failsafe, module_facts
 from giml.gate.setup import apply_setup
 from giml.maven.build import MavenBuildRunner
 from giml.maven.cache import BuildEnvironment, CachingBuildRunner, maven_version, stage_key_parts, tooling_fingerprint
@@ -21,7 +22,7 @@ from giml.maven.isolation import RunTemp, isolated_env
 from giml.maven.jdk import Jdk, JdkCatalog, resolve_jdk
 from giml.maven.project import discover_reactor
 from giml.maven.runner import MavenRunner
-from giml.plan.baseline import Baseline, verify_baseline
+from giml.plan.baseline import STAGE_ORDER, Baseline, verify_baseline
 from giml.plan.outcome_log import RewindFacts, log_baseline, oracle_strength
 from giml.store.result_cache import FileResultCache
 from giml.workspace import Workspace
@@ -44,6 +45,18 @@ class BaselineRun:
     env: Mapping[str, str]  # the isolated environment every Maven call of this run uses
 
 
+def verification_stages(config: GateConfig, project_dir: Path, has_tier: bool) -> list[str]:
+    """The baseline's stages: the three that always run, integration tests when the project has them, PIT when it earned a tier."""
+    stages = list(STAGE_ORDER)
+    reactor = discover_reactor(project_dir)
+    if config.verification.integration_tests == "when_present" and (
+            sum(module_facts(pom).integration_tests for pom in reactor) or declares_failsafe(reactor)):  # fmt: skip
+        stages.append("integration")
+    if config.verification.pit == "always" and has_tier:
+        stages.append("pit")
+    return stages
+
+
 def run_baseline(
     ws: Workspace,
     temp: RunTemp,
@@ -64,9 +77,10 @@ def run_baseline(
     logs = state_dir / "runs" / ws.run_id / "logs"
     runner = CachingBuildRunner(MavenBuildRunner(maven, env, logs), FileResultCache(state_dir / "cache"),
                                 lambda worktree, stage: stage_key_parts(worktree, stage, build_environment), logs)  # fmt: skip
-    baseline = verify_baseline(runner, project_dir, timeout_seconds, rewound=ws.rewind is not None)
-    stopped = next((s.outcome for s in baseline.stages if s.outcome is not None and baseline.stop and not s.outcome.passed), None)
     record = store.latest_gate_result(ws.repo.project_key)
+    baseline = verify_baseline(runner, project_dir, timeout_seconds, rewound=ws.rewind is not None,
+                               stages_to_run=verification_stages(config, project_dir, bool(record and record.earned_tier)))  # fmt: skip
+    stopped = next((s.outcome for s in baseline.stages if s.outcome is not None and baseline.stop and not s.outcome.passed), None)
     rewind = RewindFacts(ws.rewind.sha, ws.rewind.committed_at) if ws.rewind else None
     logged = log_baseline(store, ws.run_id, ws.repo.project_key, baseline, tier=record.earned_tier if record else None,
                           oracle=oracle_strength(record), rewind=rewind, jdk=jdk.version)  # fmt: skip

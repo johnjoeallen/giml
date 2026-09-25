@@ -22,6 +22,7 @@ autonomy:                         # what giml may do with a verified result, per
 verification:                     # stages for every tier; not part of any tier
   integration_tests: when_present # run Failsafe/*IT tests when the project has them (or off)
   startup_check: when_configured  # run the smoke check when settings configure it (or off)
+  pit: always                     # a candidate must keep the mutation scores the project earned, or the baseline's if lower (or off)
 
 shared:
   touchpoint_thresholds: same_as_tier

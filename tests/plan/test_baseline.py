@@ -136,3 +136,22 @@ def test_a_runner_error_is_not_swallowed():
         verify_baseline(Broken(), WORKTREE, 60)
 
 
+
+
+def pit_ok(**counts):
+    from giml.maven.build import StageOutcome
+
+    return StageOutcome("pit", True, 5.0, Path("/logs/pit.log"), None, details={"mutations": counts})
+
+
+def test_extra_stages_run_after_the_first_three_and_pit_reports_its_mutations():
+    runner = Scripted(compile=ok("compile"), unit_test=ok("unit_test"), enforcer=ok("enforcer", details={"violations": []}),
+                      integration=ok("integration"), pit=pit_ok(KILLED=8, SURVIVED=2))  # fmt: skip
+    baseline = verify_baseline(runner, WORKTREE, 90, stages_to_run=(*STAGE_ORDER, "integration", "pit"))
+    assert [s for _, s, _ in runner.calls] == ["compile", "unit_test", "enforcer", "integration", "pit"]
+    assert baseline.oracle_stages == ("compile", "unit_test", "enforcer", "integration", "pit")
+    assert baseline.pit_mutations == {"KILLED": 8, "SURVIVED": 2}
+
+
+def test_a_baseline_without_a_passing_pit_stage_has_no_mutations():
+    assert verify_baseline(everything_passes(), WORKTREE, 90).pit_mutations is None

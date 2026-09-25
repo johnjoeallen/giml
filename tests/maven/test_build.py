@@ -36,12 +36,37 @@ def runner(tmp_path, *replies, env=None):
 
 
 def test_the_stages_map_to_maven_goals(tmp_path):
-    assert set(STAGES) == {"compile", "unit_test", "enforcer"}
+    assert set(STAGES) == {"compile", "unit_test", "enforcer", "integration", "pit"}
     run, maven = runner(tmp_path)
-    for stage in STAGES:
+    for stage in ("compile", "unit_test", "enforcer"):
         assert run.run_stage(tmp_path / "wt", stage, 60).passed
     assert [args for _, args, *_ in maven.calls] == [
         ["test-compile", "-Denforcer.skip=true"], ["test", "-Denforcer.skip=true"], ["validate"]]  # fmt: skip
+    assert STAGES["integration"][0] == "verify" and "-Dtest=NoSuchTest" in STAGES["integration"]
+    assert "org.pitest:pitest-maven:mutationCoverage" in STAGES["pit"]
+
+
+POM = ('<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>g</groupId>'
+       "<artifactId>a</artifactId><version>1</version></project>")
+
+
+def test_a_passing_pit_stage_carries_the_mutation_outcomes_of_every_module(tmp_path):
+    project = tmp_path / "wt"
+    (project / "target" / "pit-reports").mkdir(parents=True)
+    (project / "pom.xml").write_text(POM)
+    (project / "target" / "pit-reports" / "mutations.xml").write_text(
+        '<mutations><mutation status="KILLED"/><mutation status="KILLED"/><mutation status="SURVIVED"/></mutations>')
+    run, _ = runner(tmp_path)
+    outcome = run.run_stage(project, "pit", 60)
+    assert outcome.passed and outcome.details == {"mutations": {"KILLED": 2, "SURVIVED": 1}}
+
+
+def test_a_pit_stage_without_reports_has_no_mutations(tmp_path):
+    project = tmp_path / "wt"
+    project.mkdir()
+    (project / "pom.xml").write_text(POM)
+    run, _ = runner(tmp_path)
+    assert run.run_stage(project, "pit", 60).details == {"mutations": {}}
 
 
 def test_a_passing_stage(tmp_path):
@@ -109,6 +134,6 @@ def test_every_stage_run_has_its_own_numbered_log(tmp_path):
 
 def test_an_unknown_stage_is_refused(tmp_path):
     run, maven = runner(tmp_path)
-    with pytest.raises(ValueError, match="unknown stage 'startup'; known: compile, enforcer, unit_test"):
+    with pytest.raises(ValueError, match="unknown stage 'startup'; known: compile, enforcer, integration, pit, unit_test"):
         run.run_stage(tmp_path / "wt", "startup", 60)
     assert maven.calls == []

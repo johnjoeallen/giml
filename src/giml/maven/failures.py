@@ -19,6 +19,7 @@ ENFORCER_CONVERGENCE = "enforcer_convergence"
 DUPLICATE_CLASSES = "duplicate_classes"
 UNIT_TEST = "unit_test"
 INTEGRATION_TEST = "integration_test"
+MUTATION_DROPPED = "mutation_score_dropped"  # PIT ran but the candidate's scores fell below the floor
 TIMEOUT = "timeout"
 INFRASTRUCTURE = "infrastructure"  # not the candidate's fault: retry or ignore
 VULNERABILITY_WORSE = "vulnerability_worse"  # judged from the resolved tree and the advisory snapshot, without a build

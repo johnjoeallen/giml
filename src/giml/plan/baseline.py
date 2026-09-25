@@ -15,6 +15,7 @@ For a rewind run (spec 5.3) the baseline is the rewound state, and a failure has
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -83,6 +84,12 @@ class Baseline:
         return tuple(s.stage for s in self.stages if s.status == PASSED)
 
     @property
+    def pit_mutations(self) -> dict[str, int] | None:
+        """PIT's mutation outcomes at the baseline, when the stage ran and passed."""
+        pit = next((s for s in self.stages if s.stage == "pit" and s.status == PASSED and s.outcome is not None), None)
+        return (pit.outcome.details or {}).get("mutations") if pit else None
+
+    @property
     def cache_hits(self) -> int:
         return sum(1 for s in self.stages if s.outcome is not None and s.outcome.cache_hit)
 
@@ -108,11 +115,12 @@ def _run(runner: BuildRunner, worktree, stage: str, timeout_seconds: int, retrie
     return outcome, attempts
 
 
-def verify_baseline(runner: BuildRunner, worktree, timeout_seconds: int, rewound: bool = False, retries: int = 1) -> Baseline:
+def verify_baseline(runner: BuildRunner, worktree, timeout_seconds: int, rewound: bool = False, retries: int = 1,
+                    stages_to_run: Sequence[str] = STAGE_ORDER) -> Baseline:  # fmt: skip
     """Run the stages on the unmodified worktree, in order, stopping where the spec says the project cannot go on."""
     stages: list[StageBaseline] = []
     stop: str | None = None
-    for stage in STAGE_ORDER:
+    for stage in stages_to_run:
         if stop is not None:
             stages.append(StageBaseline(stage, NOT_RUN, 0, None))
             continue

@@ -19,6 +19,7 @@ AUTONOMY_ACTIONS = ("auto_apply", "suggest_only")
 TOUCHPOINT_THRESHOLDS = ("same_as_tier",)
 INTEGRATION_TEST_MODES = ("when_present", "off")
 STARTUP_CHECK_MODES = ("when_configured", "off")
+PIT_MODES = ("always", "off")
 PLANNING_STRATEGIES = ("conservative", "latest")  # how far and how fast versions move (spec 8.2, 8.3)
 PLANNING_SCOPES = ("cve", "general")  # which dependencies may move: CVE-affected only, or all (CVE first)
 MAJOR_UPDATE_MODES = ("disallowed", "allowed", "ml")  # spec 8.7; "ml" needs ML evidence, so it is "disallowed" until M8
@@ -48,6 +49,7 @@ class VerificationSettings:
 
     integration_tests: str
     startup_check: str
+    pit: str  # always: a candidate's mutation scores must hold up; off: PIT is only measured by `assess`
 
 
 @dataclass(frozen=True)
@@ -199,6 +201,7 @@ def parse_gate_config(text: str) -> GateConfig:
     verification = VerificationSettings(
         integration_tests=verification_section.choice("integration_tests", INTEGRATION_TEST_MODES),
         startup_check=verification_section.choice("startup_check", STARTUP_CHECK_MODES),
+        pit=verification_section.choice("pit", PIT_MODES),
     )
     verification_section.finish()
 
