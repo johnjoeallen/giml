@@ -1,6 +1,8 @@
 """End-to-end tests for `giml plan` (M2 stub), `giml clean` and crashed-run reporting (spec 5, M2)."""
 
+import dataclasses
 import datetime
+import json
 import os
 import re
 import signal
@@ -14,6 +16,7 @@ from giml.cli import Environment, ExitCode, main
 from giml.git.lock import ProjectLock
 from giml.git.preflight import preflight
 from giml.store.sqlite_store import SqliteStateStore
+from tests.plan.test_analysis import SOURCES, node, snapshot
 from tests.git.repo_helpers import SINGLE_POM, commit_files, fingerprint, git, install_marker_hooks, make_repo
 
 UTC = datetime.UTC
@@ -39,18 +42,26 @@ def repo(tmp_path):
 
 
 class PassingMaven:
-    """Every Maven run succeeds: these tests are about the workspace, not about builds."""
+    """Every Maven run succeeds and resolves to no dependencies: these tests are about the workspace, not about builds."""
 
     def __call__(self, project, args, log, timeout, env):
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text("[INFO] BUILD SUCCESS\n")
+        target = project / "target"
+        target.mkdir(exist_ok=True)
+        (target / "giml-tree.json").write_text(json.dumps(node("org.example", "demo", "1.0")))
         return MavenResult(tuple(args), 0, 0.1, log, False)
 
 
 @pytest.fixture
 def cli(tmp_path):
     state = tmp_path / "state"
-    env = Environment(clock=Clock(), environ={}, maven=PassingMaven())
+    snapshot_dir = tmp_path / "osv-snapshot"
+    snapshot_dir.mkdir()
+    (snapshot_dir / "manifest.json").write_text(json.dumps({"stats": {"advisories": 0}}))
+    with SqliteStateStore(state / "state.db") as seeded:
+        seeded.record_snapshot(dataclasses.replace(snapshot("osv"), path=snapshot_dir))
+    env = Environment(clock=Clock(), environ={}, maven=PassingMaven(), sources=SOURCES)
 
     def run(*args):
         return main(["--state-dir", str(state), *map(str, args)], env)
@@ -70,7 +81,7 @@ def output_value(out: str, key: str) -> str:
 
 def test_plan_sets_up_workspace_without_touching_the_checkout(repo, cli, capsys):
     before = fingerprint(repo)
-    assert cli("plan", repo) == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
     out = capsys.readouterr().out
     branch, worktree = output_value(out, "branch"), output_value(out, "worktree")
     base = git(repo, "rev-parse", "HEAD")
@@ -78,20 +89,20 @@ def test_plan_sets_up_workspace_without_touching_the_checkout(repo, cli, capsys)
     assert git(repo, "rev-parse", f"{branch}~1") == base  # the [giml-setup] commit sits directly on the base
     assert git(repo, "log", "-1", "--format=%s", branch).startswith("[giml-setup]")
     assert git(worktree, "symbolic-ref", "--short", "HEAD") == branch
-    assert "stopped after baseline verification: planning arrives in milestone 5" in out
+    assert "report only: no assessment" in out
     assert f"review: git diff {base[:7]}..{branch}" in out
     assert fingerprint(repo) == before
 
     with store(cli) as s:
         [run] = s.list_runs()
         [project] = s.list_projects()
-    assert (run.branch, run.stop_reason, run.rewind_from_sha) == (branch, "planning_not_implemented", None)
+    assert (run.branch, run.stop_reason, run.rewind_from_sha) == (branch, "no_usable_tier", None)
     assert run.finished_at is not None and str(run.worktree_path) == worktree
     assert project.path == repo.resolve()
 
 
 def test_origin_url_is_stored_only_as_a_hash(repo, cli):
-    assert cli("plan", repo) == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
     with store(cli) as s:
         [project] = s.list_projects()
     assert len(project.remote_url_hash) == 64
@@ -103,7 +114,7 @@ def test_plan_with_rewind_commits_only_old_pom_and_runs_no_hooks(repo, cli, tmp_
     install_marker_hooks(repo, marker)
     before = fingerprint(repo)
     old = git(repo, "rev-parse", "HEAD~1")
-    assert cli("plan", repo, "--rewind-to", "HEAD~1") == ExitCode.SUCCESS
+    assert cli("plan", repo, "--rewind-to", "HEAD~1") == ExitCode.NO_IMPROVEMENT
     out = capsys.readouterr().out
     branch, worktree = output_value(out, "branch"), output_value(out, "worktree")
     base = git(repo, "rev-parse", "HEAD")
@@ -148,7 +159,7 @@ def test_refusals_leave_no_trace(repo, cli, capsys, setup, args, code, message):
 
 def test_detached_head_allowed_with_flag(repo, cli):
     git(repo, "checkout", "-q", "--detach")
-    assert cli("plan", repo, "--allow-detached") == ExitCode.SUCCESS
+    assert cli("plan", repo, "--allow-detached") == ExitCode.NO_IMPROVEMENT
 
 
 def test_lock_held_by_another_run_is_refused(repo, cli, capsys):
@@ -199,7 +210,7 @@ def test_crashed_run_is_detected_reported_and_cleanable(repo, cli, capsys):
     assert "crashed runs: 1 (remove with `giml clean <project>`)" in status
     assert f"  {crashed.id}  {repo.resolve()}  started " in status
 
-    assert cli("plan", repo) == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
     err = capsys.readouterr().err
     assert f"warning: earlier run {crashed.id} never finished (crashed)" in err
     with store(cli) as s:
@@ -216,7 +227,7 @@ def test_crashed_run_is_detected_reported_and_cleanable(repo, cli, capsys):
 
 def test_status_does_not_report_a_run_that_is_still_active(repo, cli, capsys):
     with store(cli) as s:
-        assert cli("plan", repo) == ExitCode.SUCCESS
+        assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
         run = s.list_runs()[0]
         s._conn.execute("UPDATE run SET finished_at = NULL")  # looks unfinished...
     with ProjectLock(cli.state, run.project_id):  # ...but its project is locked, so it is active
@@ -225,8 +236,8 @@ def test_status_does_not_report_a_run_that_is_still_active(repo, cli, capsys):
 
 
 def test_clean_removes_worktrees_and_only_recorded_branches(repo, cli, capsys):
-    assert cli("plan", repo) == ExitCode.SUCCESS
-    assert cli("plan", repo, "--rewind-to", "HEAD~1") == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
+    assert cli("plan", repo, "--rewind-to", "HEAD~1") == ExitCode.NO_IMPROVEMENT
     capsys.readouterr()
     git(repo, "branch", "giml/manual/keep-me")
     before = fingerprint(repo)
@@ -245,7 +256,7 @@ def test_clean_removes_worktrees_and_only_recorded_branches(repo, cli, capsys):
 
 
 def test_clean_never_deletes_a_checked_out_branch(repo, cli, capsys):
-    assert cli("plan", repo) == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
     branch = output_value(capsys.readouterr().out, "branch")
     assert cli("clean", repo) == ExitCode.SUCCESS
     git(repo, "checkout", "-q", branch)
@@ -257,8 +268,8 @@ def test_clean_never_deletes_a_checked_out_branch(repo, cli, capsys):
 
 def test_clean_all_and_edge_cases(repo, cli, tmp_path, capsys):
     other = make_repo(tmp_path / "other", {"pom.xml": SINGLE_POM.format(version="1.0")})
-    assert cli("plan", repo) == ExitCode.SUCCESS
-    assert cli("plan", other) == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
+    assert cli("plan", other) == ExitCode.NO_IMPROVEMENT
     capsys.readouterr()
     assert cli("clean", "--all") == ExitCode.SUCCESS
     assert len(capsys.readouterr().out.splitlines()) == 2
@@ -280,7 +291,7 @@ def test_clean_all_and_edge_cases(repo, cli, tmp_path, capsys):
 
 
 def test_clean_defaults_to_current_directory(repo, cli, monkeypatch, capsys):
-    assert cli("plan", repo) == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
     capsys.readouterr()
     monkeypatch.chdir(repo)
     assert cli("clean") == ExitCode.SUCCESS
@@ -296,7 +307,7 @@ def test_push_cannot_happen_through_any_giml_command(repo, cli, monkeypatch):
         return real_run(command, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", spy)
-    assert cli("plan", repo, "--rewind-to", "HEAD~1") == ExitCode.SUCCESS
+    assert cli("plan", repo, "--rewind-to", "HEAD~1") == ExitCode.NO_IMPROVEMENT
     assert cli("clean", repo, "--branches") == ExitCode.SUCCESS
     git_calls = [c for c in calls if c and c[0] == "git"]
     assert git_calls and not any("push" in c for c in git_calls)
@@ -312,26 +323,26 @@ def test_run_ids_are_utc_timestamps_with_a_random_suffix():
 
 def test_project_without_origin_has_no_remote_hash(tmp_path, cli):
     repo = make_repo(tmp_path / "local", {"pom.xml": SINGLE_POM.format(version="1.0")})
-    assert cli("plan", repo) == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
     with store(cli) as s:
         assert s.list_projects()[0].remote_url_hash is None
 
 
 def test_planning_one_project_never_marks_another_projects_active_run(repo, cli, tmp_path):
     other = make_repo(tmp_path / "other", {"pom.xml": SINGLE_POM.format(version="1.0")})
-    assert cli("plan", other) == ExitCode.SUCCESS
+    assert cli("plan", other) == ExitCode.NO_IMPROVEMENT
     other_key = preflight(other).project_key
     with store(cli) as s:
         s._conn.execute("UPDATE run SET finished_at = NULL, stop_reason = NULL")  # other's run is "active"
     with ProjectLock(cli.state, other_key):
-        assert cli("plan", repo) == ExitCode.SUCCESS
+        assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
     with store(cli) as s:
         [other_run] = s.list_runs(other_key)
     assert other_run.finished_at is None and other_run.stop_reason is None
 
 
 def test_clean_marks_crashed_runs_itself(repo, cli):
-    assert cli("plan", repo) == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
     with store(cli) as s:
         s._conn.execute("UPDATE run SET finished_at = NULL, stop_reason = NULL")
     assert cli("clean", repo) == ExitCode.SUCCESS
@@ -340,8 +351,8 @@ def test_clean_marks_crashed_runs_itself(repo, cli):
 
 
 def test_clean_branches_continues_past_already_deleted_ones(repo, cli, capsys):
-    assert cli("plan", repo) == ExitCode.SUCCESS
-    assert cli("plan", repo) == ExitCode.SUCCESS
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
     with store(cli) as s:
         first, second = s.list_runs()
     assert cli("clean", repo) == ExitCode.SUCCESS
@@ -367,7 +378,7 @@ def test_lfs_content_is_never_fetched_in_giml_worktrees(tmp_path, cli, capsys):
     marker.unlink()
     before = fingerprint(repo)
 
-    assert cli("plan", repo, "--rewind-to", "HEAD~1") == ExitCode.SUCCESS
+    assert cli("plan", repo, "--rewind-to", "HEAD~1") == ExitCode.NO_IMPROVEMENT
     worktree = output_value(capsys.readouterr().out, "worktree")
     assert (tmp_path / worktree / "demo" / "video.bin").read_text().startswith("version https://git-lfs")
     assert not marker.exists()

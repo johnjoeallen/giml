@@ -8,6 +8,7 @@ tracking, and the git wrapper refuses ``push`` regardless (hard rule 1).
 from __future__ import annotations
 
 import datetime
+from collections.abc import Sequence
 from pathlib import Path
 
 from giml import __version__
@@ -46,10 +47,10 @@ def require_identity(repo_root: Path) -> None:
             raise IdentityError(f"{repo_root}: git {key} is not configured; giml commits under your identity")
 
 
-def commit_all(worktree: Path, message: str) -> str:
-    """Commit every change in a giml worktree; returns the new commit SHA."""
+def commit_all(worktree: Path, message: str, paths: Sequence[Path] | None = None) -> str:
+    """Commit every change in a giml worktree, or only ``paths`` (build output stays out); returns the new commit SHA."""
     git = Git(worktree)
-    git.run("add", "-A")
+    git.run("add", "-A") if paths is None else git.run("add", "--", *map(str, paths))
     full_message = f"{message.rstrip()}\n\nGenerated-by: giml {__version__}\n"
     # --no-gpg-sign: a signing prompt must never block an unattended run.
     git.run("commit", "-q", "--no-gpg-sign", "-m", full_message)

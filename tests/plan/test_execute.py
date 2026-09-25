@@ -137,3 +137,11 @@ def test_deferral_records_carry_the_held_version_and_triggers(repo, world):
     assert (lib.id, lib.held_at_version, lib.project_id) == ("run-1:o:lib", "1.0.0", "proj")
     assert json.loads(lib.trigger_json) == {"on": ["new_release", "new_advisory", "pom_change"], "coordinates": ["o:lib"]}
     assert all(r.created_at == NOW and r.resolved_at is None for r in records)
+
+
+def test_only_the_edited_poms_are_committed_never_build_output(repo, world):
+    (repo / "target").mkdir()
+    (repo / "target" / "giml-tree.json").write_text("{}")
+    run(repo, world, FakeTrial())
+    assert "target" not in git(repo, "ls-files")
+    assert git(repo, "status", "--porcelain") == "?? target/"

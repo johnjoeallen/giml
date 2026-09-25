@@ -35,6 +35,7 @@ from giml.maven.tree import ResolutionError
 from giml.maven.runner import MavenNotFound, run_maven
 from giml.plan.analysis import MissingSnapshotError, Sources, dry_run
 from giml.plan.baseline_run import BaselineInfrastructureError, BaselineRun, run_baseline
+from giml.plan.planner import PlanRun, render_plan_summary, run_planning
 from giml.plan.report import render_summary
 from giml.store.examples import example_lines
 from giml.git.lock import LockHeld
@@ -224,15 +225,23 @@ def cmd_dry_run(args: argparse.Namespace, env: Environment, store: SqliteStateSt
 def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
     if args.dry_run:
         return cmd_dry_run(args, env, store, root)
-    if args.strategy or args.scope or args.major_updates or args.major_updates_test_scope:
-        raise UsageError("--strategy, --scope, --major-updates and --major-updates-test-scope apply to planning; "
-                         "use --dry-run until planning is built")  # fmt: skip
     config = load_gate_config(args.gate_config or default_gate_config_path())
+    overrides = {"strategy": args.strategy, "scope": args.scope, "major_updates": args.major_updates,
+                 "major_updates_test_scope": args.major_updates_test_scope}  # fmt: skip
+    options = dataclasses.replace(config.planning, **{k: v for k, v in overrides.items() if v})
+    if options.strategy == "latest":
+        raise UsageError("strategy latest is not implemented yet (milestone 5, checkpoint B); use conservative")
+    if options.scope == "general":
+        raise UsageError("scope general is not implemented yet (milestone 5); use scope cve")
     verified: list[BaselineRun] = []
+    planned: list[PlanRun] = []
 
     def verify(ws: workspace.Workspace, temp) -> str | None:
         verified.append(run_baseline(ws, temp, root, config, catalog(args.config), env.environ, env.maven, store))
-        return verified[0].baseline.stop_reason
+        if not verified[0].baseline.upgradeable:
+            return verified[0].baseline.stop_reason
+        planned.append(run_planning(ws, verified[0], root, store, config, options, env.maven, env.sources, env.clock))
+        return planned[0].stop_reason
 
     ws = workspace.set_up(args.path, root, store, env.clock, args.allow_detached, args.rewind_to, verify)
     for run in ws.crashed_runs:
@@ -249,10 +258,12 @@ def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore
     baseline = verified[0]
     print_baseline(baseline)
     raise_if_stopped(baseline, ws.rewind.sha[:7] if ws.rewind else None)
-    print("stopped after baseline verification: planning arrives in milestone 5")
-    print(f"review: git diff {ws.repo.base_sha[:7]}..{ws.branch}")
+    run = planned[0]
+    print(render_plan_summary(run.report), end="")
+    print(f"report: {run.markdown_path}")
+    print(f"review: {run.report['result']['review']}")
     print(f"cleanup: giml clean {ws.repo.project_dir}")
-    return ExitCode.SUCCESS
+    return ExitCode.SUCCESS if run.succeeded else ExitCode.NO_IMPROVEMENT
 
 
 def print_baseline(run: BaselineRun) -> None:

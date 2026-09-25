@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import json
 from pathlib import Path
@@ -9,7 +10,7 @@ from giml.maven.isolation import InsufficientSpace
 from giml.maven.runner import MavenResult
 from giml.store.sqlite_store import SqliteStateStore
 from tests.git.repo_helpers import fingerprint, git
-from tests.plan.test_analysis import NOW, repo  # noqa: F401
+from tests.plan.test_analysis import NOW, SOURCES, TREES, repo, snapshot  # noqa: F401
 
 LOGS = Path(__file__).resolve().parents[1] / "fixtures" / "logs"
 STAGE_OF = {"test-compile": "compile", "test": "unit_test", "validate": "enforcer"}
@@ -34,6 +35,8 @@ class StageMaven:
         self.calls: list[tuple[str, dict]] = []
 
     def __call__(self, project, args, log, timeout, env):
+        if args[0] not in STAGE_OF:  # the dependency tree the plan analyses after the baseline
+            return self.resolve(project, args, log)
         stage = STAGE_OF[args[0]]
         self.calls.append((stage, env))
         queue = self.replies.get(stage, [("ok", "[INFO] BUILD SUCCESS\n")])
@@ -41,6 +44,14 @@ class StageMaven:
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text(text)
         return MavenResult(tuple(args), 0 if kind == "ok" else 1, 1.5, log, False)
+
+    def resolve(self, project, args, log):
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("[INFO] BUILD SUCCESS\n")
+        for module, tree in TREES.items():
+            (project / module / "target").mkdir(parents=True, exist_ok=True)
+            (project / module / "target" / "giml-tree.json").write_text(json.dumps(tree))
+        return MavenResult(tuple(args), 0, 0.1, log, False)
 
     @property
     def stages(self):
@@ -62,8 +73,19 @@ def clock(monkeypatch):
 CLOCK = None
 
 
+def seed_snapshot(tmp_path):
+    """One OSV snapshot (with its manifest), which planning needs after the baseline."""
+    with SqliteStateStore(tmp_path / "state" / "state.db") as store:
+        if store.latest_snapshot("osv") is None:
+            directory = tmp_path / "osv-snapshot"
+            directory.mkdir()
+            (directory / "manifest.json").write_text(json.dumps({"stats": {"advisories": 0}}))
+            store.record_snapshot(dataclasses.replace(snapshot("osv"), path=directory))
+
+
 def plan(tmp_path, repo, maven, *extra):  # noqa: F811
-    env = Environment(clock=CLOCK, environ={}, maven=maven)
+    env = Environment(clock=CLOCK, environ={}, maven=maven, sources=SOURCES)
+    seed_snapshot(tmp_path)
     return main(["--state-dir", str(tmp_path / "state"), "plan", str(repo), *extra], env)
 
 
@@ -78,14 +100,14 @@ def baseline_report(tmp_path, run):
 
 def test_a_passing_baseline_runs_the_three_stages_and_records_everything(tmp_path, repo, capsys):  # noqa: F811
     maven, before = StageMaven(), fingerprint(repo)
-    assert plan(tmp_path, repo, maven) == ExitCode.SUCCESS
+    assert plan(tmp_path, repo, maven) == ExitCode.NO_IMPROVEMENT
     out = capsys.readouterr().out
     assert maven.stages == ["compile", "unit_test", "enforcer"]
     assert "baseline compile: passed (1.5 s)" in out and "baseline enforcer: passed (1.5 s)" in out
     assert "cache: 0 hit(s), 3 miss(es), 0.0 s saved" in out
-    assert "stopped after baseline verification: planning arrives in milestone 5" in out
+    assert "report only: no assessment" in out
     (run,) = runs(tmp_path)
-    assert run.stop_reason == "planning_not_implemented"
+    assert run.stop_reason == "no_usable_tier"
     report = baseline_report(tmp_path, run)
     assert report["baseline"]["upgradeable"] is True and report["baseline"]["enforcer"] == {"mode": "clean", "violations": []}
     assert [s["status"] for s in report["baseline"]["stages"]] == ["passed"] * 3
@@ -100,14 +122,14 @@ def test_the_baseline_runs_on_the_worktree_with_giml_setup_applied(tmp_path, rep
     plan(tmp_path, repo, StageMaven())
     (run,) = runs(tmp_path)
     assert git(run.worktree_path, "log", "-1", "--format=%s").startswith("[giml-setup]")
-    assert git(run.worktree_path, "status", "--porcelain") == ""
+    assert git(run.worktree_path, "status", "--porcelain", "--untracked-files=no") == ""
 
 
 def test_an_identical_second_run_is_answered_from_the_cache(tmp_path, repo, capsys):  # noqa: F811
     maven = StageMaven()
-    assert plan(tmp_path, repo, maven) == ExitCode.SUCCESS
+    assert plan(tmp_path, repo, maven) == ExitCode.NO_IMPROVEMENT
     capsys.readouterr()
-    assert plan(tmp_path, repo, maven) == ExitCode.SUCCESS
+    assert plan(tmp_path, repo, maven) == ExitCode.NO_IMPROVEMENT
     out = capsys.readouterr().out
     assert maven.stages == ["compile", "unit_test", "enforcer"]  # Maven ran only for the first
     assert "baseline compile: passed (1.5 s, cached)" in out and "cache: 3 hit(s), 0 miss(es), 4.5 s saved" in out
@@ -148,13 +170,13 @@ def test_failing_unit_tests_stop_the_run_before_the_enforcer(tmp_path, repo, cap
 
 def test_enforcer_violations_do_not_stop_the_run_they_become_the_reference(tmp_path, repo, capsys):  # noqa: F811
     maven = StageMaven(enforcer=[fixture_log("convergence-a")])
-    assert plan(tmp_path, repo, maven) == ExitCode.SUCCESS
+    assert plan(tmp_path, repo, maven) == ExitCode.NO_IMPROVEMENT
     out = capsys.readouterr().out
     assert "baseline enforcer: baseline_failed (1.5 s, enforcer_convergence " in out
     assert ("enforcer: 1 violation(s) at the baseline become the reference set: "
             "DependencyConvergence:com.fasterxml.jackson.core:jackson-core") in out  # fmt: skip
     (run,) = runs(tmp_path)
-    assert run.stop_reason == "planning_not_implemented"
+    assert run.stop_reason == "no_usable_tier"
     enforcer = baseline_report(tmp_path, run)["baseline"]["enforcer"]
     assert enforcer["mode"] == "reference" and enforcer["violations"][0]["detail"]["versions"] == ["2.13.0", "2.15.0"]
 
@@ -170,7 +192,7 @@ def test_a_persistent_infrastructure_failure_is_exit_4_and_not_blamed_on_the_pro
 def test_a_transient_infrastructure_failure_is_retried(tmp_path, repo, capsys):  # noqa: F811
     network = ("fail", "[ERROR] Could not transfer artifact org.x:y:pom:1 from/to central: Connect timed out\n")
     maven = StageMaven(compile=[network, ("ok", "[INFO] BUILD SUCCESS\n")])
-    assert plan(tmp_path, repo, maven) == ExitCode.SUCCESS
+    assert plan(tmp_path, repo, maven) == ExitCode.NO_IMPROVEMENT
     assert maven.stages == ["compile", "compile", "unit_test", "enforcer"]
 
 
@@ -189,9 +211,9 @@ def test_a_failing_rewound_baseline_has_its_own_stop_reason(tmp_path, repo, caps
 def test_a_passing_rewound_baseline_goes_on(tmp_path, repo, capsys):  # noqa: F811
     (repo / "core" / "pom.xml").write_text((repo / "core" / "pom.xml").read_text() + "<!-- newer -->\n")
     git(repo, "commit", "-qam", "newer pom")
-    assert plan(tmp_path, repo, StageMaven(), "--rewind-to", "HEAD~1") == ExitCode.SUCCESS
+    assert plan(tmp_path, repo, StageMaven(), "--rewind-to", "HEAD~1") == ExitCode.NO_IMPROVEMENT
     (run,) = runs(tmp_path)
-    assert run.stop_reason == "planning_not_implemented" and baseline_report(tmp_path, run)["baseline"]["rewound"] is True
+    assert run.stop_reason == "no_usable_tier" and baseline_report(tmp_path, run)["baseline"]["rewound"] is True
 
 
 def test_a_full_disk_stops_before_the_worktree_exists(tmp_path, repo, capsys, monkeypatch):  # noqa: F811

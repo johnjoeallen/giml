@@ -18,7 +18,7 @@ from giml.gate.setup import apply_setup
 from giml.maven.build import MavenBuildRunner
 from giml.maven.cache import BuildEnvironment, CachingBuildRunner, maven_version, stage_key_parts, tooling_fingerprint
 from giml.maven.isolation import RunTemp, isolated_env
-from giml.maven.jdk import JdkCatalog, resolve_jdk
+from giml.maven.jdk import Jdk, JdkCatalog, resolve_jdk
 from giml.maven.project import discover_reactor
 from giml.maven.runner import MavenRunner
 from giml.plan.baseline import Baseline, verify_baseline
@@ -39,6 +39,9 @@ class BaselineRun:
     report: dict
     report_path: Path
     last_log: Path | None  # the log of the stage that stopped the baseline, if any
+    runner: CachingBuildRunner  # what the baseline ran on: candidate trials reuse it, so they share its cache and environment
+    jdk: Jdk
+    env: Mapping[str, str]  # the isolated environment every Maven call of this run uses
 
 
 def run_baseline(
@@ -74,4 +77,4 @@ def run_baseline(
     path = state_dir / "reports" / ws.run_id / "baseline.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return BaselineRun(baseline, report, path, stopped.log_path if stopped else None)
+    return BaselineRun(baseline, report, path, stopped.log_path if stopped else None, runner, jdk, env)

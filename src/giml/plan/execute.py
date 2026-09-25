@@ -98,7 +98,7 @@ def _commit_steps(accepted: Mapping[str, Step], proposals: Mapping[str, Proposal
             path.write_bytes(data)
         apply_changes(_changes_of(proposals, done))
         move = proposals[key].moves[step.rank]
-        sha = commit_all(root, _commit_message(proposals[key], step, move.clears, tier, run_id))
+        sha = commit_all(root, _commit_message(proposals[key], step, move.clears, tier, run_id), touched)
         committed.append(Committed(key, step.label, step.kind, sha, move.clears, tuple(describe(c, root) for c in move.changes)))
     return committed
 
