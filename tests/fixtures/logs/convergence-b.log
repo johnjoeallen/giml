@@ -1,0 +1,32 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ---------------------------< t:convergence >----------------------------
+[INFO] Building convergence 1
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- enforcer:3.6.3:enforce (giml) @ convergence ---
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  0.194 s
+[INFO] Finished at: 2026-09-25T12:36:12+01:00
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-enforcer-plugin:3.6.3:enforce (giml) on project convergence: 
+[ERROR] Rule 0: org.apache.maven.enforcer.rules.dependency.DependencyConvergence failed with message:
+[ERROR] Failed while enforcing releasability.
+[ERROR] 
+[ERROR] Dependency convergence error for com.fasterxml.jackson.core:jackson-core:jar:2.15.0. Paths to dependency are:
+[ERROR] +-t:convergence:jar:1
+[ERROR]   +-com.fasterxml.jackson.core:jackson-databind:jar:2.15.0:compile
+[ERROR]     +-com.fasterxml.jackson.core:jackson-core:jar:2.15.0:compile
+[ERROR] and
+[ERROR] +-t:convergence:jar:1
+[ERROR]   +-com.fasterxml.jackson.core:jackson-core:jar:2.13.0:compile
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoExecutionException

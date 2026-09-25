@@ -1,0 +1,35 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ------------------------< t:duplicate-classes >-------------------------
+[INFO] Building duplicate-classes 1
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- enforcer:3.6.3:enforce (giml) @ duplicate-classes ---
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  0.204 s
+[INFO] Finished at: 2026-09-25T12:36:14+01:00
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-enforcer-plugin:3.6.3:enforce (giml) on project duplicate-classes: 
+[ERROR] Rule 0: org.codehaus.mojo.extraenforcer.dependencies.BanDuplicateClasses failed with message:
+[ERROR] Duplicate classes found:
+[ERROR] 
+[ERROR]   Found in:
+[ERROR]     commons-logging:commons-logging:jar:1.2:compile
+[ERROR]     org.slf4j:jcl-over-slf4j:jar:1.7.36:compile
+[ERROR]   Duplicate classes:
+[ERROR]     org/apache/commons/logging/impl/SimpleLog$1.class
+[ERROR]     org/apache/commons/logging/Log.class
+[ERROR]     org/apache/commons/logging/LogConfigurationException.class
+[ERROR]     org/apache/commons/logging/impl/NoOpLog.class
+[ERROR]     org/apache/commons/logging/impl/SimpleLog.class
+[ERROR]     org/apache/commons/logging/LogFactory.class
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoExecutionException

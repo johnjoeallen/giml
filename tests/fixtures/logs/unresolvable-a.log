@@ -1,0 +1,23 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ---------------------------< t:unresolvable >---------------------------
+[INFO] Building unresolvable 1
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[WARNING] The POM for org.nonexistent.giml:no-such-artifact:jar:1.0 is missing, no dependency information available
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  0.850 s
+[INFO] Finished at: 2026-09-25T12:36:10+01:00
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal on project unresolvable: Could not resolve dependencies for project t:unresolvable:jar:1
+[ERROR] dependency: org.nonexistent.giml:no-such-artifact:jar:1.0 (compile)
+[ERROR] 	Could not find artifact org.nonexistent.giml:no-such-artifact:jar:1.0 in central (https://repo.maven.apache.org/maven2)
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/DependencyResolutionException
