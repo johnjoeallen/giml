@@ -241,6 +241,21 @@ def _candidate_text(candidate: dict) -> str:
     return text + (f" ({'; '.join(notes)})" if notes else "")
 
 
+def render_summary(report: dict) -> str:
+    """The few lines `giml plan --dry-run` prints; the full report is in the files."""
+    tier, planning, exposure, summary = report["tier"], report["planning"], report["exposure"], report["summary"]
+    tier_text = f"tier {tier['earned'] or 'none'}" + ("" if tier["usable"] else ", report only")
+    worst = f"worst {exposure['max_severity']}, {exposure['at_max']} at that severity, {exposure['total']} in all" \
+        if exposure["max_severity"] else "none"  # fmt: skip
+    lines = [f"dry run: {report['project']} at {report['base_sha'][:7]} ({tier_text}; strategy {planning['strategy']}, "
+             f"scope {planning['scope']}, major updates {planning['major_updates']})",
+             f"exposure: {worst}; {summary['dependencies']} dependencies, {summary['cve_affected']} CVE-affected"]  # fmt: skip
+    lines += [f"  {e['coordinate']} {e['version']}: {e['reason']}" for e in report["dependencies"] if e["cve_affected"]]
+    if report["missing_metadata"]:
+        lines += [f"missing Central metadata for {len(report['missing_metadata'])} coordinate(s); run: {report['sync_command']}"]
+    return "\n".join(lines) + "\n"
+
+
 def render_markdown(report: dict) -> str:
     """The Markdown form of a stored dry-run report."""
     tier, planning, exposure = report["tier"], report["planning"], report["exposure"]

@@ -1,9 +1,21 @@
-usage: giml plan [-h] [--allow-detached] [--rewind-to COMMIT] path
+usage: giml plan [-h] [--allow-detached] [--rewind-to COMMIT] [--dry-run]
+                 [--strategy {conservative,latest}] [--scope {cve,general}]
+                 [--major-updates {disallowed,allowed,ml}] [--gate-config FILE]
+                 path
 
 positional arguments:
-  path                project directory containing pom.xml
+  path                  project directory containing pom.xml
 
 options:
-  -h, --help          show this help message and exit
-  --allow-detached    allow a detached HEAD as the base
-  --rewind-to COMMIT  start from pom.xml as it was at COMMIT (synthetic)
+  -h, --help            show this help message and exit
+  --allow-detached      allow a detached HEAD as the base
+  --rewind-to COMMIT    start from pom.xml as it was at COMMIT (synthetic)
+  --dry-run             analyse only: resolve, match CVEs, list candidates and write a report;
+                        builds nothing
+  --strategy {conservative,latest}
+                        how far versions move (default: gate config)
+  --scope {cve,general}
+                        what may move: cve or general (default: gate config)
+  --major-updates {disallowed,allowed,ml}
+                        major updates: disallowed, allowed or ml
+  --gate-config FILE    gate config (default: giml's own)

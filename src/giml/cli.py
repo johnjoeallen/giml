@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime
 import enum
 import json
@@ -22,12 +23,17 @@ from giml.data.central import MetadataError
 from giml.data.http import Fetcher, FetchError, UrlLibFetcher
 from giml.data.snapshots import read_manifest
 from giml import workspace
-from giml.core.config import ConfigError, default_gate_config_path, load_gate_config
+from giml.core.config import (
+    MAJOR_UPDATE_MODES, PLANNING_SCOPES, PLANNING_STRATEGIES, ConfigError, default_gate_config_path, load_gate_config,
+)  # fmt: skip
 from giml.gate.assess import JavaRunner, MavenRunner, PrerequisiteError, UnknownTierError, run_java
 from giml.gate.assess import assess as assess_project
 from giml.gate.reports import ReportError
 from giml.maven.jdk import catalog
+from giml.maven.tree import ResolutionError
 from giml.maven.runner import MavenNotFound, run_maven
+from giml.plan.analysis import MissingSnapshotError, Sources, dry_run
+from giml.plan.report import render_summary
 from giml.git.lock import LockHeld
 from giml.git.preflight import PreflightRefusal
 from giml.git.rewind import RewindError
@@ -66,6 +72,7 @@ class Environment:
     environ: dict[str, str] = field(default_factory=lambda: dict(os.environ))
     maven: MavenRunner = run_maven
     java: JavaRunner = run_java
+    sources: Sources = field(default_factory=Sources)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,6 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("path", type=Path, help="project directory containing pom.xml")
     plan.add_argument("--allow-detached", action="store_true", help="allow a detached HEAD as the base")
     plan.add_argument("--rewind-to", metavar="COMMIT", help="start from pom.xml as it was at COMMIT (synthetic)")
+    plan.add_argument("--dry-run", action="store_true",
+                      help="analyse only: resolve, match CVEs, list candidates and write a report; builds nothing")  # fmt: skip
+    plan.add_argument("--strategy", choices=PLANNING_STRATEGIES, help="how far versions move (default: gate config)")
+    plan.add_argument("--scope", choices=PLANNING_SCOPES, help="what may move: cve or general (default: gate config)")
+    plan.add_argument("--major-updates", choices=MAJOR_UPDATE_MODES, help="major updates: disallowed, allowed or ml")
+    plan.add_argument("--gate-config", type=Path, metavar="FILE", help="gate config (default: giml's own)")
 
     clean = commands.add_parser("clean", help="remove giml worktrees (and optionally result branches)")
     clean.add_argument("path", nargs="?", type=Path, help="project directory (default: current directory)")
@@ -183,7 +196,27 @@ def cmd_status(env: Environment, store: SqliteStateStore, root: Path) -> int:
     return ExitCode.SUCCESS
 
 
+def cmd_dry_run(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
+    if args.rewind_to:
+        raise UsageError("--rewind-to is not supported with --dry-run yet")
+    config = load_gate_config(args.gate_config or default_gate_config_path())
+    overrides = {"strategy": args.strategy, "scope": args.scope, "major_updates": args.major_updates}
+    options = dataclasses.replace(config.planning, **{k: v for k, v in overrides.items() if v})
+    result = dry_run(args.path, root, store, env.clock, config, options, maven=env.maven, jdks=catalog(args.config),
+                     environ=env.environ, sources=env.sources, allow_detached=args.allow_detached)  # fmt: skip
+    for warning in [result.report["tier"]["note"], *result.report["warnings"]]:
+        if warning:
+            print(f"warning: {warning}", file=sys.stderr)
+    print(render_summary(result.report), end="")
+    print(f"report: {result.markdown_path}")
+    return ExitCode.SUCCESS
+
+
 def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
+    if args.dry_run:
+        return cmd_dry_run(args, env, store, root)
+    if args.strategy or args.scope or args.major_updates:
+        raise UsageError("--strategy, --scope and --major-updates apply to planning; use --dry-run until planning is built")
     ws = workspace.set_up(args.path, root, store, env.clock, args.allow_detached, args.rewind_to)
     for run in ws.crashed_runs:
         print(f"warning: earlier run {run.id} never finished (crashed); its worktree {run.worktree_path} "
@@ -256,7 +289,7 @@ def main(argv: Sequence[str] | None = None, env: Environment | None = None) -> i
         print(f"giml: unsupported: {exc}", file=sys.stderr)
         return ExitCode.INELIGIBLE
     except (UsageError, PomError, StoreError, RewindError, IdentityError, ConfigError, PrerequisiteError,
-            UnknownTierError) as exc:  # fmt: skip
+            UnknownTierError, MissingSnapshotError, ResolutionError) as exc:  # fmt: skip
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.CONFIGURATION
     except (FetchError, MetadataError, GitError, BranchExistsError, ForeignWorktreeError, MavenNotFound,

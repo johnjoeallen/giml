@@ -6,8 +6,8 @@ from giml.core.config import PlanningSettings
 from giml.core.model import Coordinate, Finding, Severity, SeverityRating, SeveritySource
 from giml.maven.declarations import ExternalParent, Site
 from giml.plan.candidates import Candidate, DependencyPlan
-from giml.plan.exposure import Exposure, ResolvedDependency, TreeExposure
-from giml.plan.report import ReportInputs, TierStatus, build_report, render_markdown
+from giml.plan.exposure import ResolvedDependency, TreeExposure, exposure_of
+from giml.plan.report import ReportInputs, TierStatus, build_report, render_markdown, render_summary
 
 NOW = datetime.datetime(2026, 9, 25, 12, 0, tzinfo=datetime.UTC)
 ROOT = Path("/state/worktrees/proj/run")
@@ -42,7 +42,7 @@ def tier(usable=True, earned="A"):
 
 
 def inputs(deps, plans, options=None, tier_status=None, latest=None, **extra) -> ReportInputs:
-    exposure = TreeExposure(tuple(deps), Exposure(SeverityRating.HIGH, 1, 1), "osv-1")
+    exposure = TreeExposure(tuple(deps), exposure_of(f for d in deps for f in d.findings), "osv-1")
     return ReportInputs(
         project="proj", base_sha="abc1234def", run_id="run-1", worktree=ROOT, generated_at=NOW, config_version=3,
         options=options or PlanningSettings(7, 60, 120, "conservative", "cve", "disallowed", 7),
@@ -173,7 +173,7 @@ def test_summary_counts_and_exposure():
     report = build_report(inputs([fix, stuck, blocked, ok], plans))
     assert report["summary"] == {"dependencies": 4, "direct": 3, "cve_affected": 3, "fix_available": 1,
                                  "fix_blocked_major": 1, "no_fix": 1, "update_available": 0}  # fmt: skip
-    assert report["exposure"] == {"max_severity": "HIGH", "at_max": 1, "total": 1}
+    assert report["exposure"] == {"max_severity": "HIGH", "at_max": 1, "total": 3}
     assert report["missing_metadata"] == []
 
 
@@ -231,3 +231,27 @@ def test_markdown_for_a_report_without_a_usable_tier_and_with_missing_metadata()
     assert "Tier: none. no assessment; run giml assess" in text and "report only" in text.lower()
     assert "Missing Central metadata" in text and "`giml sync --central --coordinate o:l`" in text
 
+
+
+def test_summary_text_for_the_terminal():
+    dep = resolved("o:l", "2.17.1", [finding("A", "o:l", "2.17.1", fixed="2.17.3")])
+    fixed = plan(dep, "fix_available", [candidate(["cve_patch"], "2.17.3")])
+    ok, missing = resolved("o:ok", "1"), resolved("o:gap", "1", [finding("G", "o:gap", "1", SeverityRating.LOW)])
+    report = build_report(inputs([dep, ok, missing], [fixed, plan(ok, "up_to_date"), plan(missing, "no_metadata")]))
+    text = render_summary(report)
+    assert text.splitlines() == [
+        "dry run: proj at abc1234 (tier A; strategy conservative, scope cve, major updates disallowed)",
+        "exposure: worst HIGH, 1 at that severity, 2 in all; 3 dependencies, 2 CVE-affected",
+        "  o:l 2.17.1: CVE-A fixed by a patch bump (2.17.1 → 2.17.3); a candidate, not built (dry run)",
+        "  o:gap 1: CVE-G left open: no Central metadata for o:gap; run `giml sync --central --coordinate o:gap`",
+        "missing Central metadata for 1 coordinate(s); run: giml sync --central --coordinate o:gap",
+    ]
+
+
+def test_summary_text_without_findings_or_a_tier():
+    dep = resolved("o:ok", "1")
+    text = render_summary(build_report(inputs([dep], [plan(dep, "up_to_date")], tier_status=tier(usable=False, earned=None))))
+    assert text.splitlines() == [
+        "dry run: proj at abc1234 (tier none, report only; strategy conservative, scope cve, major updates disallowed)",
+        "exposure: none; 1 dependencies, 0 CVE-affected",
+    ]
