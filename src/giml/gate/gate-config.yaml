@@ -32,4 +32,5 @@ planning:
   release_cooldown_days: 7        # ignore artifact versions younger than this
   max_builds: 60
   max_wall_minutes: 120
-  objective_profile: conservative_patch  # or latest_first; see spec section 8.5
+  strategy: conservative          # how far versions move: conservative (patch, then minor) or latest; spec section 8
+  scope: cve                      # what may move: cve (only CVE-affected dependencies) or general (CVE first, then the rest)

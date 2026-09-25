@@ -19,6 +19,8 @@ AUTONOMY_ACTIONS = ("auto_apply", "suggest_only")
 TOUCHPOINT_THRESHOLDS = ("same_as_tier",)
 INTEGRATION_TEST_MODES = ("when_present", "off")
 STARTUP_CHECK_MODES = ("when_configured", "off")
+PLANNING_STRATEGIES = ("conservative", "latest")  # how far and how fast versions move (spec 8.2, 8.3)
+PLANNING_SCOPES = ("cve", "general")  # which dependencies may move: CVE-affected only, or all (CVE first)
 
 
 class ConfigError(ValueError):
@@ -58,7 +60,8 @@ class PlanningSettings:
     release_cooldown_days: int
     max_builds: int
     max_wall_minutes: int
-    objective_profile: str
+    strategy: str
+    scope: str
 
 
 @dataclass(frozen=True)
@@ -207,7 +210,8 @@ def parse_gate_config(text: str) -> GateConfig:
         release_cooldown_days=planning_section.int("release_cooldown_days", minimum=0),
         max_builds=planning_section.int("max_builds", minimum=1),
         max_wall_minutes=planning_section.int("max_wall_minutes", minimum=1),
-        objective_profile=planning_section.text("objective_profile"),
+        strategy=planning_section.choice("strategy", PLANNING_STRATEGIES),
+        scope=planning_section.choice("scope", PLANNING_SCOPES),
     )
     planning_section.finish()
     root.finish()

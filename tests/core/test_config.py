@@ -33,7 +33,7 @@ def test_default_config_loads_as_specified():
         "when_present", "when_configured",
     )  # fmt: skip
     assert config.shared.flake_check_runs == 5
-    assert config.planning.objective_profile == "conservative_patch"
+    assert (config.planning.strategy, config.planning.scope) == ("conservative", "cve")
     assert config.planning.release_cooldown_days == 7
     assert config.warnings == ()
 
@@ -78,7 +78,10 @@ def test_missing_key_is_rejected():
         (("shared",), "touchpoint_thresholds", "custom", "one of same_as_tier"),
         (("planning",), "release_cooldown_days", -1, "integer >= 0"),
         (("planning",), "max_wall_minutes", 1.5, "integer >= 1"),
-        (("planning",), "objective_profile", " ", "non-empty string"),
+        (("planning",), "strategy", "conservative_patch", "one of conservative, latest"),
+        (("planning",), "strategy", True, "one of conservative, latest"),
+        (("planning",), "scope", "all", "one of cve, general"),
+        (("planning",), "scope", None, "one of cve, general"),
     ],
 )
 def test_invalid_values_are_rejected(section, key, value, message):
@@ -316,3 +319,26 @@ def test_project_settings_allow_exclusions_must_be_a_boolean(tmp_path, value):
     write(tmp_path / ".giml" / "settings.yml", f"allow_exclusions: {value}\n")
     with pytest.raises(ConfigError, match=r"settings\.yml\.allow_exclusions: expected true or false"):
         load_project_settings(tmp_path)
+
+
+def test_planning_accepts_every_strategy_and_scope_combination():
+    for strategy in ("conservative", "latest"):
+        for scope in ("cve", "general"):
+            data = default_data()
+            data["planning"].update(strategy=strategy, scope=scope)
+            assert (parse(data).planning.strategy, parse(data).planning.scope) == (strategy, scope)
+
+
+@pytest.mark.parametrize("key", ["strategy", "scope"])
+def test_planning_strategy_and_scope_are_required(key):
+    data = default_data()
+    del data["planning"][key]
+    with pytest.raises(ConfigError, match=rf"planning\.{key}: required key missing"):
+        parse(data)
+
+
+def test_the_retired_objective_profile_key_is_rejected():
+    data = default_data()
+    data["planning"]["objective_profile"] = "conservative_patch"
+    with pytest.raises(ConfigError, match=r"planning: unknown key\(s\): objective_profile"):
+        parse(data)
