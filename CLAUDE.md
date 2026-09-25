@@ -28,6 +28,7 @@ These are enforced by code and tests, not just convention:
 - Milestone: **M3 (Gate assessment) complete, awaiting review** (2026-09-24). `giml assess`, the survey script and per-project JDK choice are done; the survey ran on redkite, arete and grip (all below Tier B; grip closest at line 86.7%, strength 78.6%); Q7 and Q8 answered. Next: M4, build runner, cache and outcome logging.
 - M1 accepted 2026-09-24. M2 checkpoint recorded (dff9705); work then continued into M3.
 - Self-gate during M3: Tier B PASS (line 99.4%, branch 97.2%, test strength 90.4%, mutation coverage 89.9%, excluded share 2.6%, 0 flaky of 5 runs).
+- Current work (2026-09-25): **M5a, the analysis half of M5 (`giml plan --dry-run`)**, done before M4 (spec §17). M3 still awaits the user's acceptance. redkite earned Tier A at `970df7f` (line 97.1, branch 91.5, strength 92.8, mutation 91.3).
 - Update this line and the log below at each checkpoint.
 
 ## Build and test commands
@@ -61,6 +62,7 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-25: Milestones reordered: the no-build analysis of M5 (resolve, CVE exposure, candidate ladder, report; `plan --dry-run`) is M5a and comes before M4, since redkite already meets Tier A and analysis needs no build machinery. Rewind comparison stays last. User choice.
 - 2026-09-24: The planner may add `<exclusion>`s to fix enforcer violations only when the project's `.giml/settings.yml` sets `allow_exclusions: true` (default false); parsed now, used from M5 (spec §8.4). User choice.
 - 2026-09-24: A clean enforcer run is required to finish a plan, not to start one. Baseline violations are recorded and become planning goals (pins per §8.4); candidates may not add violations; fewer violations ranks first in every profile; a run left with violations exits 1 with its progress on the branch. User instruction.
 - 2026-09-24: Tier numbers stay at gate config version 3 (spec Q7); the survey projects were too far below Tier B to calibrate boundaries. Policy's 80% = PIT mutation coverage, 85% = test strength (Q8), as Tier B already says. User answers.

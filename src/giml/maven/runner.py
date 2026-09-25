@@ -12,11 +12,13 @@ import shutil
 import signal
 import subprocess
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 _TERMINATE_GRACE_SECONDS = 10
+
+Env = Mapping[str, str] | None  # None: inherit giml's own environment
 
 
 class MavenNotFound(RuntimeError):
@@ -34,6 +36,9 @@ class MavenResult:
     @property
     def succeeded(self) -> bool:
         return self.exit_code == 0
+
+
+MavenRunner = Callable[[Path, list[str], Path, float, Env], MavenResult]
 
 
 def _kill_group(process: subprocess.Popen) -> None:
@@ -54,7 +59,7 @@ def run_maven(
     args: Sequence[str],
     log_path: Path,
     timeout_seconds: float,
-    env: Mapping[str, str] | None = None,
+    env: Env = None,
 ) -> MavenResult:
     mvn = shutil.which("mvn", path=(env or os.environ).get("PATH"))
     if mvn is None:

@@ -663,6 +663,12 @@ Work in order; stop at each checkpoint.
 - **Survey run** across the user's real projects producing a table of the four metrics side by side, to calibrate tier numbers.
 - Acceptance: assessment JSON matches section 6.4; survey report produced; thresholds reviewed with the user before locking the config version.
 
+**M5a — Analysis, `giml plan --dry-run` (done before M4; reordered 2026-09-25)**
+- The no-build half of M5, so a project gets CVE and upgrade findings before the build machinery exists. It runs in a giml worktree at the base commit and only reads snapshots (section 7.3).
+- Steps, each its own increment: (1) resolve every reactor module's effective tree from the pinned dependency plugin's JSON output; (2) locate where each version is declared (direct, property, `dependencyManagement`, parent); (3) CVE exposure over the resolved tree from the OSV snapshot; (4) candidate ladder per section 8.2 for the chosen profile, with cooldown and pre-release rules; (5) the report (section 14): a reason line per upgradable dependency, remaining CVEs, enforcer violations, snapshot ids. Projects below Tier B, or without a valid assessment, get the report-only listing of outdated and vulnerable dependencies and no candidates.
+- Candidates are listed, never built: `--dry-run` performs no builds and edits no POM.
+- Acceptance: on redkite, arete and grip the dry run lists the resolved tree, its CVEs and each dependency's candidates with reasons; results are identical for identical snapshots; the developer's checkout is untouched; nothing is fetched except by `giml sync`.
+
 **M4 — Build runner, cache, outcome logging (est. 1 week)**
 - `BuildRunner` with isolated dirs, shared repository cache, content-addressed caching with hit/miss and timing metrics, baseline verification (including the rewound baseline and `rewind_baseline_failed`, section 5.3), failure classification, error-signature normalisation, `example` logging.
 - Acceptance: repeated identical runs show cache hits; baseline failure is handled per section 9.1; signatures are stable across path/timestamp differences.

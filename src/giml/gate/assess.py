@@ -28,13 +28,11 @@ from giml.git.preflight import RepoState, preflight
 from giml.git.worktrees import WorktreeManager, require_identity
 from giml.maven.jdk import JdkCatalog, catalog, resolve_jdk
 from giml.maven.project import discover_reactor
-from giml.maven.runner import MavenResult, run_maven
+from giml.maven.runner import Env, MavenResult, MavenRunner, run_maven
 
 STOP_ASSESSED = "assessed"
 STOP_TESTS_FAILED = "tests_failed"
 
-Env = Mapping[str, str] | None  # None: inherit giml's own environment
-MavenRunner = Callable[[Path, list[str], Path, float, Env], MavenResult]
 JavaRunner = Callable[[list[str], float, Env], subprocess.CompletedProcess]
 
 
