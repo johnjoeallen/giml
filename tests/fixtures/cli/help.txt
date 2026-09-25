@@ -8,6 +8,7 @@ positional arguments:
     status              show snapshot ages, the state directory and crashed runs
     assess              measure test quality and earn a tier (runs Maven)
     plan                plan upgrades for a project (M2: sets up the workspace only)
+    export-examples     write the logged training examples as JSONL (spec 15)
     clean               remove giml worktrees (and optionally result branches)
 
 options:

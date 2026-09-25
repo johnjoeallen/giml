@@ -22,6 +22,7 @@ from giml.maven.jdk import JdkCatalog, resolve_jdk
 from giml.maven.project import discover_reactor
 from giml.maven.runner import MavenRunner
 from giml.plan.baseline import Baseline, verify_baseline
+from giml.plan.outcome_log import RewindFacts, log_baseline, oracle_strength
 from giml.store.result_cache import FileResultCache
 from giml.workspace import Workspace
 
@@ -48,6 +49,7 @@ def run_baseline(
     jdks: JdkCatalog,
     environ: Mapping[str, str] | None,
     maven: MavenRunner,
+    store,
     timeout_seconds: int = MAVEN_TIMEOUT_SECONDS,
 ) -> BaselineRun:
     env_in = os.environ if environ is None else environ
@@ -61,9 +63,14 @@ def run_baseline(
                                 lambda worktree, stage: stage_key_parts(worktree, stage, build_environment), logs)  # fmt: skip
     baseline = verify_baseline(runner, project_dir, timeout_seconds, rewound=ws.rewind is not None)
     stopped = next((s.outcome for s in baseline.stages if s.outcome is not None and baseline.stop and not s.outcome.passed), None)
+    record = store.latest_gate_result(ws.repo.project_key)
+    rewind = RewindFacts(ws.rewind.sha, ws.rewind.committed_at) if ws.rewind else None
+    logged = log_baseline(store, ws.run_id, ws.repo.project_key, baseline, tier=record.earned_tier if record else None,
+                          oracle=oracle_strength(record), rewind=rewind, jdk=jdk.version)  # fmt: skip
     report = {"run_id": ws.run_id, "base_sha": ws.repo.base_sha, "rewind_from": ws.rewind.sha if ws.rewind else None,
               "setup_commit": setup.commit, "tooling_added": setup.added, "tooling_kept": setup.kept, "jdk": jdk.record(),
-              "baseline": baseline.as_dict(), "cache": runner.metrics().as_dict()}  # fmt: skip
+              "baseline": baseline.as_dict(), "cache": runner.metrics().as_dict(),
+              "logged": {"attempts": logged.attempts, "new_examples": logged.examples_new}}  # fmt: skip
     path = state_dir / "reports" / ws.run_id / "baseline.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

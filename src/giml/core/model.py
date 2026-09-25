@@ -130,6 +130,45 @@ class RunRecord:
 
 
 @dataclass(frozen=True)
+class CandidateStateRecord:
+    """A tree a run builds: the baseline, and later each candidate (spec 11)."""
+
+    id: str
+    run_id: str
+    parent_id: str | None
+    changes_json: str
+    status: str
+
+
+@dataclass(frozen=True)
+class BuildAttemptRecord:
+    """One stage run on a state (spec 11)."""
+
+    id: str
+    state_id: str
+    stage: str
+    outcome: str  # "pass" or "fail"
+    failure_class: str | None
+    error_signature: str | None
+    cache_key: str | None
+    cache_hit: bool
+    duration_ms: int
+    log_path: str | None
+
+
+@dataclass(frozen=True)
+class ExampleRecord:
+    """A labelled training example (spec 15). ``dedup_hash`` drops exact repeats."""
+
+    id: str
+    run_id: str
+    features_json: str
+    label_json: str
+    split_group: str
+    dedup_hash: str
+
+
+@dataclass(frozen=True)
 class GateResultRecord:
     run_id: str
     project_id: str

@@ -36,6 +36,7 @@ from giml.maven.runner import MavenNotFound, run_maven
 from giml.plan.analysis import MissingSnapshotError, Sources, dry_run
 from giml.plan.baseline_run import BaselineInfrastructureError, BaselineRun, run_baseline
 from giml.plan.report import render_summary
+from giml.store.examples import example_lines
 from giml.git.lock import LockHeld
 from giml.git.preflight import PreflightRefusal
 from giml.git.rewind import RewindError
@@ -110,6 +111,9 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--major-updates-test-scope", choices=TEST_SCOPE_MODES,
                       help="let major changes in test-only dependencies pass the major-update gate: allowed or disallowed")  # fmt: skip
     plan.add_argument("--gate-config", type=Path, metavar="FILE", help="gate config (default: giml's own)")
+
+    export = commands.add_parser("export-examples", help="write the logged training examples as JSONL (spec 15)")
+    export.add_argument("--out", type=Path, metavar="FILE", help="file to write (default: standard output)")
 
     clean = commands.add_parser("clean", help="remove giml worktrees (and optionally result branches)")
     clean.add_argument("path", nargs="?", type=Path, help="project directory (default: current directory)")
@@ -227,7 +231,7 @@ def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore
     verified: list[BaselineRun] = []
 
     def verify(ws: workspace.Workspace, temp) -> str | None:
-        verified.append(run_baseline(ws, temp, root, config, catalog(args.config), env.environ, env.maven))
+        verified.append(run_baseline(ws, temp, root, config, catalog(args.config), env.environ, env.maven, store))
         return verified[0].baseline.stop_reason
 
     ws = workspace.set_up(args.path, root, store, env.clock, args.allow_detached, args.rewind_to, verify)
@@ -297,6 +301,19 @@ def cmd_assess(args: argparse.Namespace, env: Environment, store: SqliteStateSto
     return ExitCode.SUCCESS
 
 
+def cmd_export_examples(args: argparse.Namespace, store: SqliteStateStore) -> int:
+    lines = list(example_lines(store))
+    text = "".join(f"{line}\n" for line in lines)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text, encoding="utf-8")
+        print(f"{len(lines)} example(s) written to {args.out}", file=sys.stderr)
+    else:
+        sys.stdout.write(text)
+        print(f"{len(lines)} example(s)", file=sys.stderr)
+    return ExitCode.SUCCESS
+
+
 def cmd_clean(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
     if args.all and args.path:
         raise UsageError("pass a project path or --all, not both")
@@ -323,6 +340,8 @@ def main(argv: Sequence[str] | None = None, env: Environment | None = None) -> i
                 return cmd_plan(args, env, store, root)
             if args.command == "clean":
                 return cmd_clean(args, env, store, root)
+            if args.command == "export-examples":
+                return cmd_export_examples(args, store)
             return cmd_status(env, store, root)
     except (PreflightRefusal, LockHeld) as exc:
         print(f"giml: refused: {exc}", file=sys.stderr)

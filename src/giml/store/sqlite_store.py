@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
-from giml.core.model import GateResultRecord, ProjectRecord, RunRecord, SnapshotInfo
+from giml.core.model import (
+    BuildAttemptRecord, CandidateStateRecord, ExampleRecord, GateResultRecord, ProjectRecord, RunRecord, SnapshotInfo,
+)  # fmt: skip
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 
@@ -186,6 +188,52 @@ class SqliteStateStore:
             (project_id,),
         ).fetchone()
         return _gate_result_from_row(row) if row else None
+
+
+    def save_state(self, state: CandidateStateRecord) -> None:
+        self._conn.execute(
+            "INSERT INTO candidate_state (id, run_id, parent_id, changes_json, status) VALUES (?, ?, ?, ?, ?)",  # pragma: no mutate
+            (state.id, state.run_id, state.parent_id, state.changes_json, state.status),
+        )
+
+    def list_states(self, run_id: str) -> list[CandidateStateRecord]:
+        rows = self._conn.execute(
+            "SELECT id, run_id, parent_id, changes_json, status FROM candidate_state "  # pragma: no mutate
+            "WHERE run_id = ? ORDER BY rowid",  # pragma: no mutate
+            (run_id,),
+        ).fetchall()
+        return [CandidateStateRecord(*row) for row in rows]
+
+    def save_attempt(self, attempt: BuildAttemptRecord) -> None:
+        self._conn.execute(
+            "INSERT INTO build_attempt (id, state_id, stage, outcome, failure_class, error_signature, cache_key, "  # pragma: no mutate
+            "cache_hit, duration_ms, log_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",  # pragma: no mutate
+            (attempt.id, attempt.state_id, attempt.stage, attempt.outcome, attempt.failure_class, attempt.error_signature,
+             attempt.cache_key, int(attempt.cache_hit), attempt.duration_ms, attempt.log_path),
+        )  # fmt: skip
+
+    def list_attempts(self, run_id: str) -> list[BuildAttemptRecord]:
+        rows = self._conn.execute(
+            "SELECT a.id, a.state_id, a.stage, a.outcome, a.failure_class, a.error_signature, a.cache_key, "  # pragma: no mutate
+            "a.cache_hit, a.duration_ms, a.log_path FROM build_attempt a "  # pragma: no mutate
+            "JOIN candidate_state s ON s.id = a.state_id WHERE s.run_id = ? ORDER BY a.rowid",  # pragma: no mutate
+            (run_id,),
+        ).fetchall()
+        return [BuildAttemptRecord(*row[:7], bool(row[7]), row[8], row[9]) for row in rows]
+
+    def save_example(self, example: ExampleRecord) -> bool:
+        inserted = self._conn.execute(
+            "INSERT OR IGNORE INTO example (id, run_id, features_json, label_json, split_group, dedup_hash) "  # pragma: no mutate
+            "VALUES (?, ?, ?, ?, ?, ?)",  # pragma: no mutate
+            (example.id, example.run_id, example.features_json, example.label_json, example.split_group, example.dedup_hash),
+        ).rowcount
+        return inserted == 1
+
+    def list_examples(self) -> list[ExampleRecord]:
+        rows = self._conn.execute(
+            "SELECT id, run_id, features_json, label_json, split_group, dedup_hash FROM example ORDER BY id"  # pragma: no mutate
+        ).fetchall()
+        return [ExampleRecord(*row) for row in rows]
 
 
 def _gate_result_from_row(row: tuple) -> GateResultRecord:

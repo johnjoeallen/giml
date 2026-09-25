@@ -11,7 +11,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from giml.core.model import (
+    BuildAttemptRecord,
+    CandidateStateRecord,
     Coordinate,
+    ExampleRecord,
     Finding,
     GateResultRecord,
     ProjectRecord,
@@ -56,6 +59,24 @@ class StateStore(Protocol):
 
     def latest_gate_result(self, project_id: str) -> GateResultRecord | None:
         """The most recent assessment of a project, expired or not (M3)."""
+
+    def save_state(self, state: CandidateStateRecord) -> None:
+        """Record a tree a run builds (M4)."""
+
+    def list_states(self, run_id: str) -> list[CandidateStateRecord]:
+        """A run's states, oldest first (M4)."""
+
+    def save_attempt(self, attempt: BuildAttemptRecord) -> None:
+        """Record one stage run (M4)."""
+
+    def list_attempts(self, run_id: str) -> list[BuildAttemptRecord]:
+        """A run's stage runs in the order they were recorded (M4)."""
+
+    def save_example(self, example: ExampleRecord) -> bool:
+        """Record a training example; False when an exact duplicate is already there (M4)."""
+
+    def list_examples(self) -> list[ExampleRecord]:
+        """Every example, ordered by id (M4)."""
 
 
 class ResultCache(Protocol):

@@ -142,6 +142,13 @@ def test_a_repeated_stage_is_answered_from_the_cache_with_its_original_timing(tm
     assert second.log_path.read_text() == f"cache hit: outcome of {Path('/orig/01.log')}, 12.0 s originally\n"
 
 
+def test_outcomes_carry_the_cache_key_on_a_miss_and_on_a_hit(tmp_path, repo):
+    runner, _ = caching(tmp_path, repo, passed())
+    expected = runner.cache.key(stage_key_parts(repo, "unit_test", ENV))
+    assert runner.run_stage(repo, "unit_test", 60).cache_key == expected
+    assert runner.run_stage(repo, "unit_test", 60).cache_key == expected
+
+
 def test_failures_are_cached_with_their_class_and_signature(tmp_path, repo):
     runner, inner = caching(tmp_path, repo, failed())
     runner.run_stage(repo, "compile", 60)

@@ -549,6 +549,8 @@ Minimum tables (columns indicative; add indices as needed):
 
 Schema migrations are versioned and tested.
 
+**As implemented in M4** (migration 0004): `candidate_state`, `build_attempt` and `example`. A state is the tree a run builds (the baseline is `<run-id>:baseline`; candidates arrive with M5). An attempt is one stage run with its outcome, failure class and signature, cache key, whether it was a cache hit, and its duration and log. An example is one row per stage attempt, labelled, with the project as its split group. `deferral` and `knowledge_transition` arrive with the planner (M5), which is what creates transitions and pins.
+
 ---
 
 ## 12. Startup verification (smoke runner)
@@ -617,6 +619,7 @@ giml plan <path> [--strategy S] [--scope S]   full pipeline; leaves result branc
               [--rewind-to <commit>]         start from pom.xml at <commit> (section 5.3)
 giml report <run-id> [--format json|md]      re-render a stored report
 giml clean [--all] [--branches]              remove worktrees (and optionally branches)
+giml export-examples [--out FILE]            write the logged training examples as JSONL (section 15)
 ```
 
 `--strategy` (`conservative`, default, or `latest`), `--scope` (`cve`, default, or `general`) and `--major-updates` (`disallowed`, default, `allowed` or `ml`) and `--major-updates-test-scope` (`disallowed`, default, or `allowed`) override `planning.strategy`, `planning.scope`, `planning.major_updates` and `planning.major_updates_test_scope` (section 8).
@@ -669,7 +672,8 @@ From milestone 4, every attempt is logged as a labelled example:
 - **Deduplication**: exact dedup on (dependency, from, to, signature); near-duplicate detection (embedding similarity) for forks/vendored copies; multi-module repeat errors collapsed.
 - **Splits**: by project group and by time (train on older releases, test on newer). No project or near-duplicate appears on both sides.
 - **Label weighting**: by tier/oracle strength; results from projects below the use-gate may be included for *training* at reduced weight, especially where the fix is independently confirmed, but the **use gate** (section 6) alone decides where suggestions are trusted.
-- Export to JSONL/Parquet for `ml/`.
+- Export to JSONL/Parquet for `ml/`. Implemented for JSONL (M4): `giml export-examples` writes one canonical JSON object per example, ordered by id, so the same examples give the same bytes. Parquet would add a dependency and is left until the ML layers need it.
+- **What M4 logs** (`plan/outcome_log.py`): per stage that ran on the baseline, an attempt and one example whose features are the failure class, the normalised signature and error lines, the duration, whether it was a cache hit, the retry count, the project's tier and oracle strength (from its latest assessment), the rewind facts, the JDK and, for the enforcer, its violations. Exact repeats are dropped on a hash of (project, stage, outcome, signature, rewind commit), so re-running an unchanged project does not multiply examples. Infrastructure failures that a retry replaced are not logged. The candidate-specific features (changed coordinates, version jumps, API and tree diffs, knowledge counts) arrive with the candidates in M5.
 
 ---
 

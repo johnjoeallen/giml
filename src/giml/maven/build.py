@@ -34,6 +34,7 @@ class StageOutcome:
     failure: Failure | None  # None when the stage passed
     cache_hit: bool = False  # answered from the result cache, with the original timing (spec 10)
     details: dict[str, Any] | None = None  # JSON-able extras that must survive the cache: the enforcer's violations
+    cache_key: str | None = None  # the content-addressed key the result was looked up by, when it went through the cache
 
     @property
     def violations(self) -> tuple[Violation, ...]:

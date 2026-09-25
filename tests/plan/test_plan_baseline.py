@@ -208,3 +208,85 @@ def test_a_dirty_checkout_is_still_refused_before_anything_runs(tmp_path, repo, 
     (repo / "core" / "pom.xml").write_text("dirty\n")
     maven = StageMaven()
     assert plan(tmp_path, repo, maven) == ExitCode.PREFLIGHT_REFUSAL and maven.calls == []
+
+
+def logged(tmp_path):
+    with SqliteStateStore(tmp_path / "state" / "state.db") as store:
+        ordered = sorted(store.list_runs(), key=lambda r: r.started_at)
+        return ([store.list_attempts(r.id) for r in ordered], store.list_examples(), [store.list_states(r.id) for r in ordered])
+
+
+def test_every_stage_attempt_and_a_labelled_example_are_logged(tmp_path, repo, capsys):  # noqa: F811
+    plan(tmp_path, repo, StageMaven())
+    ((attempts,), examples, ((state,),)) = logged(tmp_path)
+    assert state.status == "baseline_verified" and state.id.endswith(":baseline")
+    assert [(a.stage, a.outcome, a.cache_hit, a.duration_ms) for a in attempts] == [
+        ("compile", "pass", False, 1500), ("unit_test", "pass", False, 1500), ("enforcer", "pass", False, 1500)]  # fmt: skip
+    assert all(a.cache_key and len(a.cache_key) == 64 for a in attempts) and len({a.cache_key for a in attempts}) == 3
+    assert len(examples) == 3 and {e.split_group for e in examples} == {state.id.split(":")[0] and examples[0].split_group}
+    assert examples[0].split_group.startswith("proj-")  # the project key: examples are split by project
+    (run,) = runs(tmp_path)
+    assert baseline_report(tmp_path, run)["logged"] == {"attempts": 3, "new_examples": 3}
+
+
+def test_a_repeat_logs_its_cache_hits_but_no_duplicate_examples(tmp_path, repo, capsys):  # noqa: F811
+    maven = StageMaven()
+    plan(tmp_path, repo, maven)
+    plan(tmp_path, repo, maven)
+    (first, second), examples, _ = logged(tmp_path)
+    assert [a.cache_hit for a in first] == [False] * 3 and [a.cache_hit for a in second] == [True] * 3
+    assert [a.cache_key for a in first] == [a.cache_key for a in second]  # the same content, the same key
+    assert len(examples) == 3
+    newest = sorted(runs(tmp_path), key=lambda r: r.started_at)[-1]
+    assert baseline_report(tmp_path, newest)["logged"] == {"attempts": 3, "new_examples": 0}
+
+
+def test_a_failing_baseline_is_logged_with_its_class_and_signature(tmp_path, repo, capsys):  # noqa: F811
+    plan(tmp_path, repo, StageMaven(compile=[fixture_log("compile-error-a")]))
+    ((attempts,), examples, ((state,),)) = logged(tmp_path)
+    assert state.status == "baseline_failed" and [(a.stage, a.outcome, a.failure_class) for a in attempts] == [("compile", "fail", "compile")]
+    (example,) = examples
+    features = json.loads(example.features_json)
+    assert features["failure_class"] == "compile" and len(features["signature"]) == 16
+    assert "App.java:[<n>,<n>] cannot find symbol" in features["key_lines"]
+    assert json.loads(example.label_json) == {"stage": "compile", "outcome": "fail", "failure_class": "compile"}
+
+
+def test_the_assessments_tier_and_oracle_strength_become_features(tmp_path, repo, capsys):  # noqa: F811
+    from giml.core.model import GateResultRecord, RunRecord
+    from giml.git.preflight import preflight
+
+    project = preflight(repo).project_key
+    with SqliteStateStore(tmp_path / "state" / "state.db") as store:
+        from giml.core.model import ProjectRecord
+
+        store.save_project(ProjectRecord(project, repo, None, NOW))
+        store.start_run(RunRecord("assessed", project, "abc", "b", Path("/w"), NOW, kind="assess"))
+        store.save_gate_result(GateResultRecord("assessed", project, "abc", 3, "B", json.dumps({"measured": {"pit_test_strength": 91.5, "unit_line_coverage": 88.0}}),
+                                                NOW, NOW + datetime.timedelta(days=30)))  # fmt: skip
+    plan(tmp_path, repo, StageMaven())
+    features = json.loads(logged(tmp_path)[1][0].features_json)
+    assert (features["tier"], features["oracle"]) == ("B", {"unit_line_coverage": 88.0, "pit_test_strength": 91.5})
+
+
+def test_examples_are_exported_as_jsonl(tmp_path, repo, capsys):  # noqa: F811
+    plan(tmp_path, repo, StageMaven(unit_test=[fixture_log("test-failure-a")]))
+    capsys.readouterr()
+    out = tmp_path / "examples.jsonl"
+    env = Environment(clock=CLOCK, environ={})
+    assert main(["--state-dir", str(tmp_path / "state"), "export-examples", "--out", str(out)], env) == ExitCode.SUCCESS
+    assert "2 example(s) written to " in capsys.readouterr().err
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert [(r["id"].split(":")[-1], r["label"]["outcome"]) for r in rows] == [("compile", "pass"), ("unit_test", "fail")]
+    assert set(rows[1]) == {"id", "run_id", "split_group", "dedup_hash", "features", "label"}
+    assert rows[1]["features"]["failure_class"] == "unit_test" and out.read_text().endswith("\n")
+    # the same examples give the same bytes, and stdout gets the same lines
+    assert main(["--state-dir", str(tmp_path / "state"), "export-examples"], env) == ExitCode.SUCCESS
+    assert capsys.readouterr().out == out.read_text()
+
+
+def test_exporting_nothing_is_not_an_error(tmp_path, capsys):
+    env = Environment(clock=CLOCK, environ={})
+    assert main(["--state-dir", str(tmp_path / "state"), "export-examples"], env) == ExitCode.SUCCESS
+    captured = capsys.readouterr()
+    assert captured.out == "" and "0 example(s)" in captured.err

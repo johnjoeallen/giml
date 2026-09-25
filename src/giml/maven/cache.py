@@ -135,14 +135,14 @@ class CachingBuildRunner:
         key = self.cache.key(self.key_parts(worktree, stage))
         entry = self.cache.get(key)
         if _valid(entry):
-            return self._hit(stage, entry)
-        outcome = self.inner.run_stage(worktree, stage, timeout_seconds)
+            return self._hit(stage, entry, key)
+        outcome = dataclasses.replace(self.inner.run_stage(worktree, stage, timeout_seconds), cache_key=key)
         self._metrics.record(stage, False, outcome.duration_seconds)
         if outcome.passed or outcome.failure_class not in _NOT_CACHED:
             self.cache.put(key, _entry(outcome))
         return outcome
 
-    def _hit(self, stage: str, entry: dict[str, Any]) -> StageOutcome:
+    def _hit(self, stage: str, entry: dict[str, Any], key: str) -> StageOutcome:
         self._hits += 1
         failure = entry["failure"]
         log = self.logs_dir / f"cache-hit-{self._hits:02d}-{stage}.log"
@@ -153,4 +153,5 @@ class CachingBuildRunner:
         log.write_text(text, encoding="utf-8")
         self._metrics.record(stage, True, entry["duration_seconds"])
         restored = Failure(failure["class"], failure["signature"], tuple(failure["key_lines"])) if failure else None
-        return StageOutcome(stage, entry["passed"], entry["duration_seconds"], log, restored, cache_hit=True, details=entry["details"])
+        return StageOutcome(stage, entry["passed"], entry["duration_seconds"], log, restored, cache_hit=True,
+                            details=entry["details"], cache_key=key)  # fmt: skip
