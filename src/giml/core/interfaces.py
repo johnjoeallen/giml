@@ -125,7 +125,7 @@ class SmokeSettingsProvider(Protocol):
 
 
 class RiskScorer(Protocol):
-    """Predicts whether a candidate fails its next stage (spec 16, layer 2). Phase 1: a default that always abstains."""
+    """Orders candidate states. Phase 1: deterministic heuristic (M5). Later: trained model."""
 
-    def score(self, candidate: Any) -> float | None:
-        """Estimated probability that the candidate fails, or None to abstain. A prior, never a verdict."""
+    def score(self, candidate: Any) -> float:
+        """Estimated breakage risk; lower is tried first. A prior, never a verdict."""
