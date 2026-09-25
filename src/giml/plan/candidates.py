@@ -58,6 +58,11 @@ def major_of(version: str) -> str:
     return match.group() if match else version
 
 
+def only_in_test_scope(scopes: Sequence[str]) -> bool:
+    """Every place the dependency appears is test scope; an unknown scope counts as not test-only."""
+    return bool(scopes) and all(scope == "test" for scope in scopes)
+
+
 def is_prerelease(version: str) -> bool:
     """Below its own numeric release in Maven ordering (1.0-rc1, 2.0-M1, 1.0-SNAPSHOT)."""
     match = _NUMERIC_PREFIX.match(version)
@@ -205,11 +210,12 @@ def plan_dependency(
     elif in_scope and options.strategy == "conservative" and (step := ladder.next_step()) is not None:
         add(*step)
 
+    gated = options.major_updates != "allowed" and not (
+        options.major_updates_test_scope == "allowed" and only_in_test_scope(dependency.scopes))  # fmt: skip
     candidates = []
     for version in sorted(kinds, key=ComparableVersion, reverse=options.strategy == "latest"):
         remaining, new = ladder.advisories_of(version) if cve_affected else (frozenset(), frozenset())
-        blocked = _major_block(options.major_updates) \
-            if level(dependency.version, version) == "major" and options.major_updates != "allowed" else None  # fmt: skip
+        blocked = _major_block(options.major_updates) if level(dependency.version, version) == "major" and gated else None
         candidates.append(Candidate(tuple(sorted(kinds[version], key=_KIND_RANK.__getitem__)), version,
                                     ladder.released[version], ladder.released[version] is None,
                                     (not remaining) if cve_affected else None, tuple(sorted(remaining)),

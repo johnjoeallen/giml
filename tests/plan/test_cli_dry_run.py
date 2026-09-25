@@ -53,6 +53,11 @@ def test_options_override_the_config(state, repo, capsys):
     assert "strategy latest, scope general, major updates allowed" in out
 
 
+def test_the_test_scope_option_overrides_the_config(state, repo, capsys):
+    assert plan(state, repo, "--major-updates-test-scope", "allowed") == ExitCode.SUCCESS
+    assert "major updates disallowed, test-scope majors allowed)" in capsys.readouterr().out
+
+
 def test_no_assessment_says_so_on_stderr_and_proposes_nothing(tmp_path, repo, capsys):
     state = tmp_path / "state"
     with SqliteStateStore(state / "state.db") as store:
@@ -95,7 +100,8 @@ def test_rewind_is_not_yet_combined_with_a_dry_run(state, repo, capsys):
     assert "--rewind-to is not supported with --dry-run yet" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("flag", [["--strategy", "latest"], ["--scope", "general"], ["--major-updates", "allowed"]])
+@pytest.mark.parametrize("flag", [["--strategy", "latest"], ["--scope", "general"], ["--major-updates", "allowed"],
+                                  ["--major-updates-test-scope", "allowed"]])  # fmt: skip
 def test_planning_options_need_a_dry_run_until_planning_exists(state, repo, capsys, flag):
     assert main(["--state-dir", str(state), "plan", str(repo), *flag], env()) == ExitCode.CONFIGURATION
     assert "apply to planning; use --dry-run" in capsys.readouterr().err

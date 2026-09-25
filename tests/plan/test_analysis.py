@@ -143,7 +143,7 @@ def test_dry_run_of_a_project_with_a_valid_tier(repo, tmp_path, store):
     assert report["tier"]["earned"] == "A" and report["tier"]["declared"] == "A" and report["tier"]["note"] == ""
     assert report["snapshots"] == {"osv": "osv-1", "central": "central-1"} and report["warnings"] == []
     assert report["planning"] == {"strategy": "conservative", "scope": "cve", "major_updates": "disallowed",
-                                  "release_cooldown_days": 7}  # fmt: skip
+                                  "major_updates_test_scope": "disallowed", "release_cooldown_days": 7}  # fmt: skip
     assert [d["coordinate"] for d in report["dependencies"]] == ["o:lib", "o:deep", "o:other"]
     lib = entry(report, "o:lib")
     assert (lib["status"], lib["change"], lib["direct"], lib["modules"]) == ("fix_available", "edit", True, ["g:core"])
@@ -221,7 +221,7 @@ def test_stale_snapshots_produce_warnings(repo, tmp_path):
 
 def test_scope_general_and_the_options_change_the_candidates(repo, tmp_path, store):
     assess_result(store, repo)
-    options = PlanningSettings(7, 60, 120, "conservative", "general", "allowed", 7)
+    options = PlanningSettings(7, 60, 120, "conservative", "general", "allowed", 7, "disallowed")
     report = run(repo, tmp_path, store, options).report
     other = entry(report, "o:other")
     assert (other["status"], [(c["kinds"], c["version"]) for c in other["candidates"]]) == (

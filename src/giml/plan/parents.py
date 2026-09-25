@@ -19,7 +19,7 @@ from giml.core.config import PlanningSettings
 from giml.core.model import Coordinate, VersionRelease
 from giml.maven.declarations import Declarations, Site
 from giml.maven.tree import ResolutionError
-from giml.plan.candidates import eligible_versions, level, major_of
+from giml.plan.candidates import eligible_versions, level, major_of, only_in_test_scope
 from giml.plan.exposure import Exposure, TreeExposure
 
 MAX_EVALUATIONS = 40  # resolutions per change unit, nearest versions first
@@ -109,14 +109,28 @@ def _versions(tree: TreeExposure) -> dict[Coordinate, frozenset[str]]:
     return {c: frozenset(v) for c, v in found.items()}
 
 
-def _major_change(before: dict[Coordinate, frozenset[str]], after: dict[Coordinate, frozenset[str]], mode: str) -> str | None:
-    """The first dependency whose major version differs between the trees, worded as a gate reason."""
+def _test_only(tree: TreeExposure) -> frozenset[Coordinate]:
+    scopes: dict[Coordinate, set[str]] = {}
+    for dependency in tree.dependencies:
+        scopes.setdefault(dependency.coordinate, set()).update(dependency.scopes)
+    return frozenset(c for c, found in scopes.items() if only_in_test_scope(sorted(found)))
+
+
+def _major_change(before: dict[Coordinate, frozenset[str]], after: dict[Coordinate, frozenset[str]],
+                  options: PlanningSettings, test_only: frozenset[Coordinate]) -> str | None:  # fmt: skip
+    """The first dependency whose major version differs between the trees, worded as a gate reason.
+
+    A dependency that is test-only in both trees passes when ``major_updates_test_scope`` allows it;
+    otherwise the reason says it is test-only, so the option is easy to find.
+    """
+    exempt = test_only if options.major_updates_test_scope == "allowed" else frozenset()
     for coordinate in sorted(before.keys() & after.keys()):
         old, new = {major_of(v) for v in before[coordinate]}, {major_of(v) for v in after[coordinate]}
-        if old != new:
+        if old != new and coordinate not in exempt:
             side = lambda majors: "/".join(f"{m}.x" for m in sorted(majors))  # noqa: E731
-            suffix = " and there is no ML evidence" if mode == "ml" else ""
-            return f"major update: changes {coordinate} from {side(old)} to {side(new)}; major_updates is {mode}{suffix}"
+            text = f"major update: changes {coordinate} from {side(old)} to {side(new)}; major_updates is {options.major_updates}"
+            text += " and there is no ML evidence" if options.major_updates == "ml" else ""
+            return text + (" (test scope only; `major_updates_test_scope` is `disallowed`)" if coordinate in test_only else "")
     return None
 
 
@@ -128,7 +142,8 @@ def _evaluate(version: str, unit: ChangeUnit, current: TreeExposure, resolve: Ca
     except ResolutionError as exc:
         return Evaluation(**base, exposure=None, cleared=(), introduced=(), changed=0, blocked=None, failed=str(exc))
     before, after = _versions(current), _versions(tree)
-    blocked = None if options.major_updates == "allowed" else _major_change(before, after, options.major_updates)
+    blocked = None if options.major_updates == "allowed" else \
+        _major_change(before, after, options, _test_only(current) & _test_only(tree))  # fmt: skip
     return Evaluation(**base, exposure=tree.exposure, cleared=tuple(sorted(_advisories(current) - _advisories(tree))),
                       introduced=tuple(sorted(_advisories(tree) - _advisories(current))),
                       changed=sum(1 for c in before.keys() & after.keys() if before[c] != after[c]),

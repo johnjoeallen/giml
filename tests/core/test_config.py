@@ -35,6 +35,7 @@ def test_default_config_loads_as_specified():
     assert config.shared.flake_check_runs == 5
     assert (config.planning.strategy, config.planning.scope) == ("conservative", "cve")
     assert config.planning.major_updates == "disallowed" and config.planning.max_snapshot_age_days == 7
+    assert config.planning.major_updates_test_scope == "disallowed"
     assert config.planning.release_cooldown_days == 7
     assert config.warnings == ()
 
@@ -80,6 +81,8 @@ def test_missing_key_is_rejected():
         (("planning",), "release_cooldown_days", -1, "integer >= 0"),
         (("planning",), "max_wall_minutes", 1.5, "integer >= 1"),
         (("planning",), "max_snapshot_age_days", 0, "integer >= 1"),
+        (("planning",), "major_updates_test_scope", "ignore", "one of disallowed, allowed"),
+        (("planning",), "major_updates_test_scope", True, "one of disallowed, allowed"),
         (("planning",), "strategy", "conservative_patch", "one of conservative, latest"),
         (("planning",), "strategy", True, "one of conservative, latest"),
         (("planning",), "scope", "all", "one of cve, general"),
@@ -340,7 +343,14 @@ def test_planning_accepts_every_major_update_mode(mode):
     assert parse(data).planning.major_updates == mode
 
 
-@pytest.mark.parametrize("key", ["strategy", "scope", "major_updates", "max_snapshot_age_days"])
+@pytest.mark.parametrize("mode", ["disallowed", "allowed"])
+def test_planning_accepts_both_test_scope_modes(mode):
+    data = default_data()
+    data["planning"]["major_updates_test_scope"] = mode
+    assert parse(data).planning.major_updates_test_scope == mode
+
+
+@pytest.mark.parametrize("key", ["strategy", "scope", "major_updates", "max_snapshot_age_days", "major_updates_test_scope"])
 def test_planning_strategy_and_scope_are_required(key):
     data = default_data()
     del data["planning"][key]

@@ -1,6 +1,7 @@
 usage: giml plan [-h] [--allow-detached] [--rewind-to COMMIT] [--dry-run]
                  [--strategy {conservative,latest}] [--scope {cve,general}]
-                 [--major-updates {disallowed,allowed,ml}] [--gate-config FILE]
+                 [--major-updates {disallowed,allowed,ml}]
+                 [--major-updates-test-scope {disallowed,allowed}] [--gate-config FILE]
                  path
 
 positional arguments:
@@ -18,4 +19,7 @@ options:
                         what may move: cve or general (default: gate config)
   --major-updates {disallowed,allowed,ml}
                         major updates: disallowed, allowed or ml
+  --major-updates-test-scope {disallowed,allowed}
+                        let major changes in test-only dependencies pass the major-update gate:
+                        allowed or disallowed
   --gate-config FILE    gate config (default: giml's own)

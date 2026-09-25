@@ -22,6 +22,7 @@ STARTUP_CHECK_MODES = ("when_configured", "off")
 PLANNING_STRATEGIES = ("conservative", "latest")  # how far and how fast versions move (spec 8.2, 8.3)
 PLANNING_SCOPES = ("cve", "general")  # which dependencies may move: CVE-affected only, or all (CVE first)
 MAJOR_UPDATE_MODES = ("disallowed", "allowed", "ml")  # spec 8.7; "ml" needs ML evidence, so it is "disallowed" until M8
+TEST_SCOPE_MODES = ("disallowed", "allowed")  # whether a major change in a test-only dependency counts (spec 8.7)
 
 
 class ConfigError(ValueError):
@@ -65,6 +66,7 @@ class PlanningSettings:
     scope: str
     major_updates: str
     max_snapshot_age_days: int  # planning warns when a data snapshot is older than this (spec 7.3)
+    major_updates_test_scope: str  # "allowed": major changes in dependencies that only have test scope pass the gate
 
 
 @dataclass(frozen=True)
@@ -217,6 +219,7 @@ def parse_gate_config(text: str) -> GateConfig:
         scope=planning_section.choice("scope", PLANNING_SCOPES),
         major_updates=planning_section.choice("major_updates", MAJOR_UPDATE_MODES),
         max_snapshot_age_days=planning_section.int("max_snapshot_age_days", minimum=1),
+        major_updates_test_scope=planning_section.choice("major_updates_test_scope", TEST_SCOPE_MODES),
     )
     planning_section.finish()
     root.finish()

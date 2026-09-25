@@ -45,7 +45,7 @@ def inputs(deps, plans, options=None, tier_status=None, latest=None, **extra) ->
     exposure = TreeExposure(tuple(deps), exposure_of(f for d in deps for f in d.findings), "osv-1")
     return ReportInputs(
         project="proj", base_sha="abc1234def", run_id="run-1", worktree=ROOT, generated_at=NOW, config_version=3,
-        options=options or PlanningSettings(7, 60, 120, "conservative", "cve", "disallowed", 7),
+        options=options or PlanningSettings(7, 60, 120, "conservative", "cve", "disallowed", 7, "disallowed"),
         tier=tier_status or tier(), snapshots={"osv": "osv-1", "central": "central-1"},
         jdk={"version": "21.0.9", "home": "/jdk", "source": "global config"}, exposure=exposure, plans=tuple(plans),
         latest_available=latest or {}, parents=extra.get("parents", ()), skipped=extra.get("skipped", ()),
@@ -85,7 +85,7 @@ def test_major_only_fix_is_left_open_with_the_mode():
     blocked = candidate(["cve_major"], "3.0.1", blocked="major update: major_updates is disallowed")
     report = one_dep(dep, plan(dep, "fix_blocked_major", [blocked]))
     assert reason_of(report, "o:l") == "CVE-A left open: the only fix is a major update (2.x to 3.0.1) and `major_updates` is `disallowed`"
-    ml = PlanningSettings(7, 60, 120, "conservative", "cve", "ml", 7)
+    ml = PlanningSettings(7, 60, 120, "conservative", "cve", "ml", 7, "disallowed")
     blocked_ml = candidate(["cve_major"], "3.0.1", blocked="major update: major_updates is ml and there is no ML evidence")
     assert "`major_updates` is `ml` and there is no ML evidence" in reason_of(
         one_dep(dep, plan(dep, "fix_blocked_major", [blocked_ml]), options=ml), "o:l")  # fmt: skip
@@ -104,7 +104,7 @@ def test_no_fix_reason_mentions_cooldown_and_metadata():
 def test_latest_strategy_reason_names_the_aspirational_candidate():
     dep = resolved("o:l", "2.17.1", [finding("A", "o:l", "2.17.1")])
     p = plan(dep, "fix_available", [candidate(["latest_in_major"], "2.19.4"), candidate(["cve_patch"], "2.17.3")])
-    options = PlanningSettings(7, 60, 120, "latest", "cve", "disallowed", 7)
+    options = PlanningSettings(7, 60, 120, "latest", "cve", "disallowed", 7, "disallowed")
     assert reason_of(one_dep(dep, p, options=options), "o:l") == (
         "CVE-A: aim for 2.19.4 (latest_in_major), demoting to 2.17.3 (cve_patch) if it fails; a candidate, not built (dry run)")
 
@@ -211,7 +211,7 @@ def test_header_fields_and_declaration_notes():
     report = build_report(inputs([dep], [plan(dep, "up_to_date")], parents=(parent,), skipped=("pom.xml: dependencies ${g}:a",)))
     assert (report["kind"], report["project"], report["run_id"], report["base_sha"]) == ("dry_run", "proj", "run-1", "abc1234def")
     assert report["planning"] == {"strategy": "conservative", "scope": "cve", "major_updates": "disallowed",
-                                  "release_cooldown_days": 7}  # fmt: skip
+                                  "major_updates_test_scope": "disallowed", "release_cooldown_days": 7}  # fmt: skip
     assert report["snapshots"] == {"osv": "osv-1", "central": "central-1"} and report["config_version"] == 3
     assert report["external_parents"] == [{"coordinate": "org.springframework.boot:spring-boot-starter-parent",
                                            "version": "3.3.5", "file": "pom.xml", "line": 10}]  # fmt: skip
@@ -265,6 +265,16 @@ def test_summary_text_for_the_terminal():
         "  o:gap 1: CVE-G left open: no Central metadata for o:gap; run `giml sync --central --coordinate o:gap`",
         "missing Central metadata for 1 coordinate(s); run: giml sync --central --coordinate o:gap",
     ]
+
+
+def test_summary_and_markdown_mention_an_allowed_test_scope():
+    dep = resolved("o:ok", "1")
+    options = PlanningSettings(7, 60, 120, "conservative", "cve", "disallowed", 7, "allowed")
+    report = build_report(inputs([dep], [plan(dep, "up_to_date")], options=options))
+    assert render_summary(report).splitlines()[0].endswith("major updates disallowed, test-scope majors allowed)")
+    assert "major updates `disallowed`, test-scope majors `allowed`" in render_markdown(report)
+    plain = build_report(inputs([dep], [plan(dep, "up_to_date")]))
+    assert "test-scope" not in render_summary(plain) and "test-scope" not in render_markdown(plain)
 
 
 def test_summary_text_without_findings_or_a_tier():
@@ -343,7 +353,7 @@ def test_no_improvement_reason_mentions_skipped_majors_and_truncation():
     assert unit_reason(with_units([p])) == (
         "no newer version improves exposure (5 advisories stay open); 2 newer major version(s) were not evaluated because "
         "`major_updates` is `disallowed`; only the nearest versions were evaluated")  # fmt: skip
-    allowed = PlanningSettings(7, 60, 120, "conservative", "cve", "allowed", 7)
+    allowed = PlanningSettings(7, 60, 120, "conservative", "cve", "allowed", 7, "disallowed")
     assert "not evaluated" not in unit_reason(with_units([unit_plan("no_improvement", skipped_majors=0)], options=allowed))
 
 

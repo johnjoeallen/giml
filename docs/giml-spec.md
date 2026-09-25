@@ -264,6 +264,7 @@ planning:
   strategy: conservative          # how far versions move: conservative (default; patch, then minor) or latest. See section 8
   scope: cve                      # what may move: cve (default; only CVE-affected dependencies) or general (CVE first, then the rest)
   major_updates: disallowed       # disallowed (default) | allowed | ml (only with ML evidence that no code change is needed). See section 8.7
+  major_updates_test_scope: disallowed  # allowed: a major change in a dependency with only test scope passes the gate above (section 8.7)
   max_snapshot_age_days: 7        # planning warns when a data snapshot is older than this (section 7.3)
 ```
 
@@ -475,6 +476,7 @@ A **major update** changes the first numeric component of a dependency's resolve
 - **Where the gate applies:** to the candidate's **resolved tree** (section 8.1), compared with the base commit's, so a major change that arrives indirectly, through a parent or BOM upgrade or as a transitive of an accepted version, counts as much as a direct one. It is a filter applied before any build: a blocked candidate costs no build, is recorded (section 15) as `blocked_major_update`, and appears in the report. Forced moves (section 8.2), which use only `next_patch` and `next_minor`, are never major.
 - **Effect on results:** a CVE whose only fix is a major update stays open, and an enforcer violation whose only fix is a major update stays unresolved (section 8.5). Each is reported with its reason and a re-evaluation trigger (a new release fixing it within the current major, a change of `major_updates`, or ML evidence).
 - **`ml` before the ML layer exists:** until a trained scorer is loaded (milestone 8+), or when it has no evidence for the dependency or abstains, `ml` behaves exactly as `disallowed` and the report says "no ML evidence". The default is therefore safe with or without ML.
+- **Test scope** (decided 2026-09-25): `planning.major_updates_test_scope` is `disallowed` (default) or `allowed` (`--major-updates-test-scope` overrides it). With `allowed`, a major change in a dependency whose every appearance in the resolved tree is test scope does not count against the gate, whatever `major_updates` says: it can break the test suite but not the shipped application, and the build verifies it. It applies to a dependency's own major fix and to majors that arrive through a parent or BOM. A dependency that is also compile, runtime or provided anywhere, or whose scope is unknown, is never exempt. With `disallowed`, a blocked test-only dependency is named as such in the reason, so the option is easy to find.
 - **ML is a prior, never a verdict** (hard rule 8): an allowed major update is still verified by a real build (section 9) like any other candidate. giml edits POM files only (section 8.4), so an accepted major update by construction needs no change to the developer's code for the build and tests to pass.
 
 ---
@@ -601,14 +603,14 @@ giml sync [--osv] [--central]               fetch/refresh snapshots (network all
 giml status                                  snapshot ages, state dir, stale worktrees
 giml assess <path> [--declared-tier X]       run gate assessment, print/store result
 giml plan <path> [--strategy S] [--scope S]   full pipeline; leaves result branch + report
-              [--major-updates disallowed|allowed|ml]
+              [--major-updates disallowed|allowed|ml] [--major-updates-test-scope disallowed|allowed]
               [--max-builds N] [--max-minutes N] [--allow-detached] [--dry-run]
               [--rewind-to <commit>]         start from pom.xml at <commit> (section 5.3)
 giml report <run-id> [--format json|md]      re-render a stored report
 giml clean [--all] [--branches]              remove worktrees (and optionally branches)
 ```
 
-`--strategy` (`conservative`, default, or `latest`), `--scope` (`cve`, default, or `general`) and `--major-updates` (`disallowed`, default, `allowed` or `ml`) override `planning.strategy`, `planning.scope` and `planning.major_updates` (section 8).
+`--strategy` (`conservative`, default, or `latest`), `--scope` (`cve`, default, or `general`) and `--major-updates` (`disallowed`, default, `allowed` or `ml`) and `--major-updates-test-scope` (`disallowed`, default, or `allowed`) override `planning.strategy`, `planning.scope`, `planning.major_updates` and `planning.major_updates_test_scope` (section 8).
 
 `--dry-run` performs preflight, assessment, and planning without building (lists candidate sets and reasons).
 

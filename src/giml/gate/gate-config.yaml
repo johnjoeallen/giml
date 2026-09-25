@@ -35,4 +35,5 @@ planning:
   strategy: conservative          # how far versions move: conservative (patch, then minor) or latest; spec section 8
   scope: cve                      # what may move: cve (only CVE-affected dependencies) or general (CVE first, then the rest)
   major_updates: disallowed       # disallowed | allowed | ml (only with ML evidence that no code change is needed); spec 8.7
+  major_updates_test_scope: disallowed  # allowed: a major change in a dependency with only test scope passes the gate above
   max_snapshot_age_days: 7        # planning warns when a data snapshot is older than this

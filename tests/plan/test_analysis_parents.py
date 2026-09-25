@@ -107,14 +107,14 @@ def test_the_analysis_leaves_no_trace_of_the_candidate_versions(repo, tmp_path, 
 
 def test_the_latest_strategy_aims_for_the_newest_and_keeps_the_smallest_step(repo, tmp_path, store):  # noqa: F811
     assess_result(store, repo)
-    options = PlanningSettings(7, 60, 120, "latest", "cve", "disallowed", 7)
+    options = PlanningSettings(7, 60, 120, "latest", "cve", "disallowed", 7, "disallowed")
     unit = unit_of(run(repo, tmp_path, store, options, maven=ParentAwareMaven(), sources=sources()).report)
     assert unit["picks"] == [{"kind": "parent_latest", "version": "3.4.0"}, {"kind": "parent_patch", "version": "3.3.6"}]
 
 
 def test_major_parent_versions_are_evaluated_when_major_updates_are_allowed(repo, tmp_path, store):  # noqa: F811
     assess_result(store, repo)
-    options = PlanningSettings(7, 60, 120, "conservative", "cve", "allowed", 7)
+    options = PlanningSettings(7, 60, 120, "conservative", "cve", "allowed", 7, "disallowed")
     maven = ParentAwareMaven()
     unit = unit_of(run(repo, tmp_path, store, options, maven=maven, sources=sources()).report)
     assert maven.parents_seen == ["3.3.5", "3.3.6", "3.4.0", "4.0.0"] and unit["skipped_majors"] == 0

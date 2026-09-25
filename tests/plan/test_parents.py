@@ -17,8 +17,8 @@ SITE = Site(Path("pom.xml"), 10, (0, 5), "version")
 UNIT = ChangeUnit("parent", PARENT, "3.3.5", SITE)
 
 
-def options(strategy="conservative", major_updates="disallowed", scope="cve", cooldown=7):
-    return PlanningSettings(cooldown, 60, 120, strategy, scope, major_updates, 7)
+def options(strategy="conservative", major_updates="disallowed", scope="cve", cooldown=7, test_scope="disallowed"):
+    return PlanningSettings(cooldown, 60, 120, strategy, scope, major_updates, 7, test_scope)
 
 
 def releases(*versions, date=OLD):
@@ -26,13 +26,16 @@ def releases(*versions, date=OLD):
 
 
 def tree(**deps) -> TreeExposure:
-    """{"o:lib": ("2.17.1", ["A", "B"])}: each advisory is HIGH unless it starts with 'm' (MEDIUM)."""
+    """{"o:lib": ("2.17.1", ["A", "B"])}: each advisory is HIGH unless it starts with 'm' (MEDIUM).
+
+    A third item sets the scope (default compile): {"o:lib": ("2.17.1", [], "test")}.
+    """
     resolved = []
-    for name, (version, advisories) in deps.items():
+    for name, (version, advisories, *scope) in deps.items():
         coordinate = Coordinate.parse(name)
         findings = tuple(Finding(a, (), Severity(SeverityRating.MEDIUM if a.startswith("m") else SeverityRating.HIGH,
                                                  SeveritySource.LABEL), coordinate, version, "0", None) for a in advisories)  # fmt: skip
-        resolved.append(ResolvedDependency(coordinate, version, (Coordinate.parse("g:m"),), ("compile",), True, findings))
+        resolved.append(ResolvedDependency(coordinate, version, (Coordinate.parse("g:m"),), tuple(scope or ["compile"]), True, findings))
     return TreeExposure(tuple(resolved), exposure_of(f for d in resolved for f in d.findings), "osv-1")
 
 
@@ -126,6 +129,45 @@ def test_a_dependency_changing_major_through_the_parent_is_blocked():
     assert blocked.blocked == "major update: changes o:lib from 2.x to 3.x; major_updates is disallowed"
     assert blocked.exposure.total == 0  # it was resolved, so its effect is known
     assert (result.status, picks(result)) == ("improves", [("parent_patch", "3.3.7")])
+
+
+def test_a_major_change_in_a_test_only_dependency_says_so_when_it_blocks():
+    current = tree(**{"o:lib": ("2.17.1", ["A", "B", "C"]), "o:hamcrest": ("2.2", [], "test")})
+    table = {"3.3.6": tree(**{"o:lib": ("2.17.3", []), "o:hamcrest": ("3.0", [], "test")})}
+    result = plan(Resolver(table), releases("3.3.6"), current=current)
+    assert result.evaluations[0].blocked == ("major update: changes o:hamcrest from 2.x to 3.x; major_updates is disallowed "
+                                             "(test scope only; `major_updates_test_scope` is `disallowed`)")  # fmt: skip
+    assert result.status == "blocked_major"
+
+
+def test_a_test_only_major_change_passes_when_the_test_scope_is_allowed():
+    current = tree(**{"o:lib": ("2.17.1", ["A", "B", "C"]), "o:hamcrest": ("2.2", [], "test")})
+    table = {"3.3.6": tree(**{"o:lib": ("2.17.3", []), "o:hamcrest": ("3.0", [], "test")})}
+    result = plan(Resolver(table), releases("3.3.6"), current=current, opts=options(test_scope="allowed"))
+    assert (result.evaluations[0].blocked, result.status, picks(result)) == (None, "improves", [("parent_patch", "3.3.6")])
+    assert result.evaluations[0].changed == 2
+
+
+def test_only_test_only_dependencies_are_exempt_and_others_still_block():
+    current = tree(**{"o:lib": ("2.17.1", ["A"]), "o:hamcrest": ("2.2", [], "test"), "o:jackson": ("2.0", [])})
+    table = {"3.3.6": tree(**{"o:lib": ("2.17.3", []), "o:hamcrest": ("3.0", [], "test"), "o:jackson": ("3.0", [])})}
+    result = plan(Resolver(table), releases("3.3.6"), current=current, opts=options(test_scope="allowed"))
+    assert result.evaluations[0].blocked == "major update: changes o:jackson from 2.x to 3.x; major_updates is disallowed"
+
+
+def test_a_dependency_that_is_not_test_only_in_both_trees_is_not_exempt():
+    current = tree(**{"o:lib": ("2.17.1", ["A"]), "o:x": ("2.0", [])})
+    table = {"3.3.6": tree(**{"o:lib": ("2.17.3", []), "o:x": ("3.0", [], "test")})}  # compile today, test after
+    result = plan(Resolver(table), releases("3.3.6"), current=current, opts=options(test_scope="allowed"))
+    assert result.evaluations[0].blocked.startswith("major update: changes o:x from 2.x to 3.x")
+
+
+def test_the_ml_reason_still_names_the_missing_evidence_for_test_only_majors():
+    current = tree(**{"o:lib": ("2.17.1", ["A"]), "o:h": ("2.0", [], "test")})
+    table = {"3.3.6": tree(**{"o:lib": ("2.17.3", []), "o:h": ("3.0", [], "test")})}
+    blocked = plan(Resolver(table), releases("3.3.6"), current=current, opts=options(major_updates="ml")).evaluations[0].blocked
+    assert blocked == ("major update: changes o:h from 2.x to 3.x; major_updates is ml and there is no ML evidence "
+                       "(test scope only; `major_updates_test_scope` is `disallowed`)")  # fmt: skip
 
 
 def test_only_a_blocked_improvement_is_reported_as_blocked():

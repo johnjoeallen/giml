@@ -262,6 +262,7 @@ def build_report(inputs: ReportInputs) -> dict:
         "config_version": inputs.config_version,
         "planning": {"strategy": inputs.options.strategy, "scope": inputs.options.scope,
                      "major_updates": inputs.options.major_updates,
+                     "major_updates_test_scope": inputs.options.major_updates_test_scope,
                      "release_cooldown_days": inputs.options.release_cooldown_days},  # fmt: skip
         "tier": {"earned": inputs.tier.earned, "declared": inputs.tier.declared, "measured_at": inputs.tier.measured_at,
                  "expires": inputs.tier.expires, "usable": inputs.tier.usable, "note": inputs.tier.note},  # fmt: skip
@@ -314,8 +315,9 @@ def render_summary(report: dict) -> str:
     tier_text = f"tier {tier['earned'] or 'none'}" + ("" if tier["usable"] else ", report only")
     worst = f"worst {exposure['max_severity']}, {exposure['at_max']} at that severity, {exposure['total']} in all" \
         if exposure["max_severity"] else "none"  # fmt: skip
+    test_scope = ", test-scope majors allowed" if planning["major_updates_test_scope"] == "allowed" else ""
     lines = [f"dry run: {report['project']} at {report['base_sha'][:7]} ({tier_text}; strategy {planning['strategy']}, "
-             f"scope {planning['scope']}, major updates {planning['major_updates']})",
+             f"scope {planning['scope']}, major updates {planning['major_updates']}{test_scope})",
              f"exposure: {worst}; {summary['dependencies']} dependencies, {summary['cve_affected']} CVE-affected"]  # fmt: skip
     lines += [f"  {e['coordinate']} {e['version']}: {e['reason']}" for e in report["dependencies"] if e["cve_affected"]]
     lines += [f"  {u['kind']} {u['coordinate']} {u['version']}: {u['reason']}" for u in report["change_units"]]
@@ -330,8 +332,9 @@ def render_markdown(report: dict) -> str:
     lines = [f"# giml dry run: {report['project']}", "",
              f"Base commit: `{report['base_sha']}`. Run `{report['run_id']}`, generated {report['generated_at']}.",
              f"Tier: {tier['earned'] or 'none'}" + (f" (measured {tier['measured_at']}, expires {tier['expires']})" if tier["usable"] else f". {tier['note']}"),
-             f"Strategy `{planning['strategy']}`, scope `{planning['scope']}`, major updates `{planning['major_updates']}`, "
-             f"cooldown {planning['release_cooldown_days']} days. Gate config version {report['config_version']}.",
+             f"Strategy `{planning['strategy']}`, scope `{planning['scope']}`, major updates `{planning['major_updates']}`"
+             + (", test-scope majors `allowed`" if planning["major_updates_test_scope"] == "allowed" else "")
+             + f", cooldown {planning['release_cooldown_days']} days. Gate config version {report['config_version']}.",
              f"Snapshots: OSV `{report['snapshots'].get('osv')}`, Central `{report['snapshots'].get('central')}`. "
              f"JDK {report['jdk'].get('version')} ({report['jdk'].get('source')}).",  # fmt: skip
              f"Exposure: worst severity {exposure['max_severity'] or 'none'}, {exposure['at_max']} at that severity, "

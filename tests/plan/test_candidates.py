@@ -15,8 +15,8 @@ OLD = NOW - datetime.timedelta(days=90)
 LIB = Coordinate.parse("o:lib")
 
 
-def settings(strategy="conservative", scope="cve", major_updates="disallowed", cooldown=7) -> PlanningSettings:
-    return PlanningSettings(cooldown, 60, 120, strategy, scope, major_updates, 7)
+def settings(strategy="conservative", scope="cve", major_updates="disallowed", cooldown=7, test_scope="disallowed") -> PlanningSettings:
+    return PlanningSettings(cooldown, 60, 120, strategy, scope, major_updates, 7, test_scope)
 
 
 class FakeAdvisories:
@@ -38,8 +38,8 @@ def releases(*versions, date=OLD) -> list[VersionRelease]:
     return sorted((VersionRelease(v, date) for v in versions), key=lambda r: ComparableVersion(r.version))
 
 
-def resolved(version: str, advisories: FakeAdvisories) -> ResolvedDependency:
-    return ResolvedDependency(LIB, version, (Coordinate.parse("g:m"),), ("compile",), True,
+def resolved(version: str, advisories: FakeAdvisories, scopes=("compile",)) -> ResolvedDependency:
+    return ResolvedDependency(LIB, version, (Coordinate.parse("g:m"),), scopes, True,
                               tuple(advisories.affecting(LIB, version)))  # fmt: skip
 
 
@@ -48,8 +48,8 @@ def declaration(origin=LITERAL, with_site=True) -> Declaration:
     return Declaration(LIB, Path("pom.xml"), "dependencies", None, None, False, "1", "1", origin, site)
 
 
-def plan(version, advisories, available, options=None, declarations=None, now=NOW):
-    dependency = resolved(version, advisories)
+def plan(version, advisories, available, options=None, declarations=None, now=NOW, scopes=("compile",)):
+    dependency = resolved(version, advisories, scopes)
     return plan_dependency(dependency, declarations if declarations is not None else [declaration()], available,
                            advisories, options or settings(), now)  # fmt: skip
 
@@ -114,6 +114,30 @@ def test_major_only_fix_is_blocked_by_default_and_reported():
 def test_major_update_modes(mode, blocked, status):
     result = plan("2.17.1", FakeAdvisories(A="3.0.1"), releases("3.0.1"), settings(major_updates=mode))
     assert (result.candidates[0].blocked, result.status) == (blocked, status)
+
+
+@pytest.mark.parametrize(("scopes", "mode", "test_scope", "blocked"), [
+    (("test",), "disallowed", "allowed", False),
+    (("test",), "ml", "allowed", False),
+    (("test",), "disallowed", "disallowed", True),
+    (("compile", "test"), "disallowed", "allowed", True),
+    (("provided",), "disallowed", "allowed", True),
+    ((), "disallowed", "allowed", True),
+    (("test",), "allowed", "disallowed", False),
+])  # fmt: skip
+def test_a_test_only_dependency_can_pass_the_major_gate(scopes, mode, test_scope, blocked):
+    options = settings(major_updates=mode, test_scope=test_scope)
+    result = plan("2.17.1", FakeAdvisories(A="3.0.1"), releases("3.0.1"), options, scopes=scopes)
+    assert (result.candidates[0].blocked is not None) is blocked
+    assert result.status == ("fix_blocked_major" if blocked else "fix_available")
+
+
+def test_the_test_scope_exemption_covers_latest_and_general_candidates_too():
+    options = settings(strategy="latest", scope="general", test_scope="allowed")
+    result = plan("1.0.0", FakeAdvisories(), releases("1.4.0", "2.0.0"), options, scopes=("test",))
+    assert [(c.version, c.blocked) for c in result.candidates] == [("2.0.0", None), ("1.4.0", None)]
+    strict = plan("1.0.0", FakeAdvisories(), releases("1.4.0", "2.0.0"), settings(strategy="latest", scope="general"), scopes=("test",))
+    assert strict.candidates[0].blocked is not None
 
 
 def test_no_fixing_version_available():

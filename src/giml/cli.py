@@ -24,7 +24,7 @@ from giml.data.http import Fetcher, FetchError, UrlLibFetcher
 from giml.data.snapshots import read_manifest
 from giml import workspace
 from giml.core.config import (
-    MAJOR_UPDATE_MODES, PLANNING_SCOPES, PLANNING_STRATEGIES, ConfigError, default_gate_config_path, load_gate_config,
+    MAJOR_UPDATE_MODES, PLANNING_SCOPES, PLANNING_STRATEGIES, TEST_SCOPE_MODES, ConfigError, default_gate_config_path, load_gate_config,
 )  # fmt: skip
 from giml.gate.assess import JavaRunner, MavenRunner, PrerequisiteError, UnknownTierError, run_java
 from giml.gate.assess import assess as assess_project
@@ -105,6 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--strategy", choices=PLANNING_STRATEGIES, help="how far versions move (default: gate config)")
     plan.add_argument("--scope", choices=PLANNING_SCOPES, help="what may move: cve or general (default: gate config)")
     plan.add_argument("--major-updates", choices=MAJOR_UPDATE_MODES, help="major updates: disallowed, allowed or ml")
+    plan.add_argument("--major-updates-test-scope", choices=TEST_SCOPE_MODES,
+                      help="let major changes in test-only dependencies pass the major-update gate: allowed or disallowed")  # fmt: skip
     plan.add_argument("--gate-config", type=Path, metavar="FILE", help="gate config (default: giml's own)")
 
     clean = commands.add_parser("clean", help="remove giml worktrees (and optionally result branches)")
@@ -200,7 +202,8 @@ def cmd_dry_run(args: argparse.Namespace, env: Environment, store: SqliteStateSt
     if args.rewind_to:
         raise UsageError("--rewind-to is not supported with --dry-run yet")
     config = load_gate_config(args.gate_config or default_gate_config_path())
-    overrides = {"strategy": args.strategy, "scope": args.scope, "major_updates": args.major_updates}
+    overrides = {"strategy": args.strategy, "scope": args.scope, "major_updates": args.major_updates,
+                 "major_updates_test_scope": args.major_updates_test_scope}  # fmt: skip
     options = dataclasses.replace(config.planning, **{k: v for k, v in overrides.items() if v})
     result = dry_run(args.path, root, store, env.clock, config, options, maven=env.maven, jdks=catalog(args.config),
                      environ=env.environ, sources=env.sources, allow_detached=args.allow_detached)  # fmt: skip
@@ -215,8 +218,9 @@ def cmd_dry_run(args: argparse.Namespace, env: Environment, store: SqliteStateSt
 def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore, root: Path) -> int:
     if args.dry_run:
         return cmd_dry_run(args, env, store, root)
-    if args.strategy or args.scope or args.major_updates:
-        raise UsageError("--strategy, --scope and --major-updates apply to planning; use --dry-run until planning is built")
+    if args.strategy or args.scope or args.major_updates or args.major_updates_test_scope:
+        raise UsageError("--strategy, --scope, --major-updates and --major-updates-test-scope apply to planning; "
+                         "use --dry-run until planning is built")  # fmt: skip
     ws = workspace.set_up(args.path, root, store, env.clock, args.allow_detached, args.rewind_to)
     for run in ws.crashed_runs:
         print(f"warning: earlier run {run.id} never finished (crashed); its worktree {run.worktree_path} "
