@@ -82,7 +82,8 @@ class Declarations:
 class _Pom:
     def __init__(self, path: Path) -> None:
         try:
-            self.text = path.read_text(encoding="utf-8")
+            with path.open(encoding="utf-8", newline="") as handle:  # raw: a site's span must index what is written back
+                self.text = handle.read()
         except OSError as exc:
             raise PomError(f"{path}: cannot read: {exc.strerror}") from exc
         try:

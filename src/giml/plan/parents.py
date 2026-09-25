@@ -83,15 +83,21 @@ def change_units(declarations: Declarations) -> list[ChangeUnit]:
 @contextlib.contextmanager
 def with_version(site: Site, version: str, expected: str | None = None) -> Iterator[None]:
     """Write ``version`` over the site's text and put the original back afterwards, even on failure."""
-    original = site.pom.read_text(encoding="utf-8")
+    with site.pom.open(encoding="utf-8", newline="") as handle:
+        original = handle.read()
     start, end = site.span
     if expected is not None and original[start:end] != expected:
         raise ValueError(f"{site.pom}:{site.line}: the version text does not hold {expected}")
-    site.pom.write_text(original[:start] + version + original[end:], encoding="utf-8")
+    _write(site.pom, original[:start] + version + original[end:])
     try:
         yield
     finally:
-        site.pom.write_text(original, encoding="utf-8")
+        _write(site.pom, original)
+
+
+def _write(path: Path, text: str) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
 
 
 def not_evaluated(unit: ChangeUnit, current: Exposure, note: str) -> UnitPlan:
