@@ -1,6 +1,7 @@
 # GiML — Specification
 
 Status: draft v1 for implementation with Claude Code
+Revised 2026-09-25: the default planning objective is now `conservative_patch` (per dependency, the smallest verified step up from the current version); the previous default, a joint search down from the newest versions, is kept as the opt-in profile `latest_first` (formerly `cve_first`). Sections 1, 4.1, 6, 8, 13, 14 and 17 changed.
 Name: GiML — **G**ated **I**ncrements (**ML**). Gated by test-quality tiers; each accepted upgrade step is a verified increment on the result branch; ML layers are added only where they earn their place. CLI command and identifiers use lowercase `giml`; the name appears in branch prefixes, cache paths, database prefixes and package names.
 
 ---
@@ -32,7 +33,7 @@ For a local Maven project in a git repository, giml:
 
 1. Verifies the repository is in a safe state (clean, git-managed).
 2. Assesses how trustworthy the project's tests are (**tier**), using unit coverage and PIT mutation results.
-3. Plans **joint** dependency upgrades, choosing for each dependency the best version that works (not blindly the newest), balancing CVE exposure against recency.
+3. Plans dependency upgrades starting from the current versions (default profile `conservative_patch`, section 8): a dependency with a known CVE gets the smallest version step that clears it; a dependency without one is left alone unless a patch or minor step is needed and still builds. Never blindly the newest. Bumps that interact are verified jointly; an opt-in profile (`latest_first`) instead searches down from the newest versions, balancing CVE exposure against recency.
 4. Verifies each candidate state by building, running tests, and **starting the packaged application** with a designated Spring profile.
 5. Leaves the result on a local **branch in a git worktree**. It never pushes and never opens a PR. The developer inspects and decides.
 6. Records every attempt as a labelled outcome for later machine learning.
@@ -42,7 +43,7 @@ For a local Maven project in a git repository, giml:
 In scope:
 - Local, report-only CLI. Python engine. Maven projects, single-module or multi-module reactors (confirmed 2026-09-24).
 - Data sources: OSV and Maven Central only.
-- Deterministic planner with joint sets, CVE-minimal bumps, pins and bisection.
+- Deterministic planner: minimal per-dependency steps by default (CVE-clearing bumps; otherwise patch or minor steps only when needed), with joint sets, pins and bisection where bumps interact.
 - Tier assessment (JaCoCo + PIT), startup verification, outcome logging.
 - CPU-only ML layer (milestone 8+) with no AI API calls, added only if it measurably reduces builds per accepted upgrade.
 
@@ -143,8 +144,9 @@ The chosen JDK is exported as `JAVA_HOME`, with its `bin` first on `PATH`, for e
 
 ```
 preflight -> assess gate (tier) -> baseline verify -> generate candidates
-   -> plan joint sets -> verify (compile, unit, integration, startup)
-   -> on failure: isolate culprit (bisect), demote/pin, retry
+   -> promote one step per dependency (default) | plan joint sets (latest_first)
+   -> verify (compile, unit, integration, startup)
+   -> on failure: next step or keep current; isolate interacting culprits (bisect), demote/pin, retry
    -> commit accepted steps on result branch -> stop -> report
 ```
 
@@ -218,7 +220,7 @@ Rewind mode uses git history only. The developer's working tree is never touched
 
 Verification is only as strong as the project's tests. The **tier** is a measure of test quality (unit coverage and PIT levels) and nothing else. It decides how much weight results carry and, through the separate `autonomy` mapping, how much autonomy the tool has.
 
-A tier never changes *what* a good upgrade is. The CVE criteria (`cve_minimal` candidates, section 8.2) and the best-update ranking (section 8.5) apply identically to every tier; a higher tier cannot relax them and a lower tier cannot tighten them (confirmed 2026-09-24).
+A tier never changes *what* a good upgrade is. The CVE criteria (the `cve_*` candidates, section 8.2) and the planning objective (sections 8.3 and 8.5) apply identically to every tier; a higher tier cannot relax them and a lower tier cannot tighten them (confirmed 2026-09-24).
 
 ### 6.1 Central configuration (versioned)
 
@@ -259,7 +261,7 @@ planning:
   release_cooldown_days: 7        # ignore artifact versions younger than this
   max_builds: 60
   max_wall_minutes: 120
-  objective_profile: cve_first    # see section 8.5
+  objective_profile: conservative_patch  # default; or latest_first (opt-in). See section 8.5
 ```
 
 All numbers are **placeholders** to be calibrated after the survey run (milestone 3). They are configurable, and projects **choose a tier**, they do not set numbers. Changing a tier's numbers (or the config's structure) bumps `version` and triggers re-evaluation of existing results.
@@ -366,21 +368,41 @@ Effective dependency tree (via the dependency plugin's JSON output, section 3, i
 
 ### 8.2 Candidate generation
 
-For each dependency version that is *declared or managed* in the project, build an ordered candidate list from Maven Central metadata, excluding versions younger than `release_cooldown_days` and pre-releases (unless the current version is a pre-release):
+For each dependency version that is *declared or managed* in the project, build candidates from Maven Central metadata, excluding versions younger than `release_cooldown_days` and pre-releases (unless the current version is a pre-release). A dependency is **CVE-affected** when a known vulnerability (OSV snapshot, section 7.1) affects its current version. "Clears" means fixes every known vulnerability affecting the current version. Which candidates a profile uses, and in what order, is given below.
 
-1. `current` (no change).
-2. `cve_minimal`: lowest version greater than current that fixes all known vulnerabilities affecting current (prefer same major).
-3. `latest_in_major`: newest release within the current major version.
-4. `bom_managed`: the version managed by the project's parent/BOM (e.g. Spring Boot) after any parent upgrade.
-5. `latest`: newest overall release.
+| Candidate | Version | `conservative_patch` (default) | `latest_first` (opt-in) |
+|---|---|---|---|
+| `current` | no change | every dependency | every dependency |
+| `cve_patch` | lowest version within the current major.minor that clears | CVE-affected, ladder step 1 | – |
+| `cve_minor` | lowest version with a higher minor, same major, that clears | CVE-affected, step 2, only if no `cve_patch` exists or it failed | – |
+| `cve_major` | lowest version with a higher major that clears | CVE-affected, step 3, only if no `cve_minor` exists or it failed | – |
+| `cve_minimal` | the first of `cve_patch`, `cve_minor`, `cve_major` that exists | – | CVE-affected |
+| `next_patch` | lowest newer version within the current major.minor | not CVE-affected, when needed (section 8.3) | – |
+| `next_minor` | lowest version with a higher minor, same major | not CVE-affected, only if no `next_patch` exists | – |
+| `latest_in_major` | newest release within the current major | – | every dependency |
+| `bom_managed` | the version managed by the project's parent/BOM (e.g. Spring Boot) after any parent upgrade | – | every dependency |
+| `latest` | newest overall release | never | every dependency |
 
-Enforcer violations at the base commit are planning goals too: for each `dependencyConvergence` or `banDuplicatePomDependencyVersions` violation, candidates include a `dependencyManagement` pin (section 8.4) at each version in conflict and at the newest permitted version, and version changes to the dependencies that pull in the conflicting versions. When the project's settings set `allow_exclusions: true` (section 3.1), candidates also include excluding the offending transitive artifact from the dependency that pulls it in; without it, a violation that only an exclusion could fix (typically `banDuplicateClasses`) is reported as unresolved.
+Under `conservative_patch`, a dependency that is not CVE-affected never gets a major step or `latest`.
 
-Parent/BOM upgrades (for example the Spring Boot parent) are first-class candidates; they change many managed versions at once and are treated as a single change unit.
+Enforcer violations at the base commit are planning goals too: for each `dependencyConvergence` or `banDuplicatePomDependencyVersions` violation, candidates include a `dependencyManagement` pin (section 8.4) at each version in conflict (and, under `latest_first` only, at the newest permitted version), and version changes to the dependencies that pull in the conflicting versions (under `conservative_patch`, only their `cve_*` or `next_patch`/`next_minor` steps). When the project's settings set `allow_exclusions: true` (section 3.1), candidates also include excluding the offending transitive artifact from the dependency that pulls it in; without it, a violation that only an exclusion could fix (typically `banDuplicateClasses`) is reported as unresolved.
 
-### 8.3 Joint planning algorithm
+Parent/BOM upgrades (for example the Spring Boot parent) are first-class candidates; they change many managed versions at once and are treated as a single change unit, with their own candidates as above.
 
-A **state** maps each upgradable dependency to a chosen version. Start with the aspirational state (best per the objective, section 8.5) and search downward:
+### 8.3 Search algorithm
+
+A **state** maps each upgradable dependency to a chosen version. The objective profile (section 8.5) selects the search: `conservative_patch` by default, `latest_first` on request.
+
+**`conservative_patch` (default): per dependency, up from current, stop at the first pass.** Start from the baseline state (section 9.1) and treat each dependency independently:
+
+1. A CVE-affected dependency tries its ladder in order, `cve_patch`, then `cve_minor`, then `cve_major` (skipping steps that do not exist), each verified (section 9) as the baseline plus that one change. The first that passes is accepted and the ladder stops. If none passes, the dependency stays at `current`; a deferral records the reason and re-evaluation trigger (section 8.4) and the report lists the CVEs left open.
+2. A dependency that is not CVE-affected stays at `current` whenever `current` passes, which it does in the baseline, so it costs no build of its own. It is moved only when `current` fails in a state being verified (for example next to another dependency's CVE bump, step 3) or to remove an enforcer violation (section 8.2). It then tries `next_patch`, or `next_minor` when no patch release exists. If `next_patch` fails, the dependency stays at `current`.
+3. Combine the accepted steps and verify the combined state. If it passes, it is the result (subject to commit rules, section 5.2). If it fails, the forced bumps interact: isolate the culprits with group testing as in `latest_first` step 3 below, move each culprit to its next step (the next ladder level for a CVE-affected dependency; step 2 for a dependency that is not), and re-verify. If no combination passes within budget, keep the passing combination preferred by section 8.5 and report the rest as held back.
+4. Record every attempt (section 15).
+
+Stop conditions (first that occurs): every CVE-affected dependency has an accepted step or has exhausted its ladder, the enforcer goals are met or exhausted, and the combined state passes; `max_builds` or `max_wall_minutes` exhausted (the report states which ladders were not finished). There is no re-promotion: a dependency never goes past the first step that passes.
+
+**`latest_first` (opt-in): joint search down from the aspirational state.** Start with the aspirational state (best per the `latest_first` ranking, section 8.5) and search downward:
 
 1. Build and verify the aspirational state (section 9).
 2. If it passes, it becomes the result (subject to commit rules, section 5.2).
@@ -389,7 +411,7 @@ A **state** maps each upgradable dependency to a chosen version. Start with the 
 5. After a state passes, try to **re-promote** demoted dependencies one at a time (or in small groups) to see whether they now pass in combination. Stop when no untried promotion improves the ranking.
 6. Record every attempt (section 15).
 
-Stop conditions (first that occurs): no untried candidate set improves the ranking; `max_builds` or `max_wall_minutes` exhausted (the report states the result may not be optimal); zero known CVEs remain and everything is at its latest permitted version.
+Stop conditions for `latest_first` (first that occurs): no untried candidate set improves the ranking; `max_builds` or `max_wall_minutes` exhausted (the report states the result may not be optimal); zero known CVEs remain and everything is at its latest permitted version.
 
 ### 8.4 Editing POMs
 
@@ -403,14 +425,16 @@ Stop conditions (first that occurs): no untried candidate set improves the ranki
 
 A candidate state is only eligible if it passes all required verification stages; for the enforcer, that means it adds no violation absent at the base commit (section 9.1). A plan **succeeds only if its final state passes the enforcer cleanly**. So in every profile, fewer remaining enforcer violations ranks first, ahead of the profile's objectives, and a run that cannot remove them all ends without success (exit 1, section 13): the result branch still holds the verified progress and the report lists each remaining violation with the reason it could not be fixed.
 
-Eligible states are ranked lexicographically by an **objective profile** (configurable in config):
+Eligible states are then chosen by an **objective profile** (`planning.objective_profile`, section 6.1; `--profile` overrides it, section 13):
 
-`cve_first` (default):
+`conservative_patch` (default): no whole-state ranking. Each dependency's version is decided by its ladder (sections 8.2 and 8.3), and the first passing step wins, so the result is the smallest verified change that clears known CVEs. The only comparison is between combinations of interacting bumps that cannot all be kept (section 8.3, step 3): after enforcer violations, lowest CVE exposure (as `latest_first` criterion 1), then fewest changed declarations. Version lag and recency are never objectives.
+
+`latest_first` (opt-in; named `cve_first` before 2026-09-25, when it was the default), ranked lexicographically:
 1. Lowest CVE exposure over the **fully resolved tree**: maximum severity remaining, then count of vulnerabilities at that severity, then total count (OSV severity data).
 2. Smallest total version lag (or most dependencies at newest permitted version).
 3. Smallest diff (fewest changed declarations).
 
-Other profiles (`recency_first`, etc.) reorder these. Profiles are data in the config, not code.
+Other ranking profiles for the joint search (`recency_first`, etc.) reorder `latest_first`'s criteria and use its search (section 8.3). Ranking profiles are data in the config, not code; `conservative_patch`'s ladder is fixed planner behaviour with no criteria to reorder.
 
 The objective profile is independent of the tier: every tier is held to the same CVE and best-update criteria (section 6).
 
@@ -543,12 +567,14 @@ giml [--state-dir DIR] [--config FILE] COMMAND   global options (section 3.1 for
 giml sync [--osv] [--central]               fetch/refresh snapshots (network allowed)
 giml status                                  snapshot ages, state dir, stale worktrees
 giml assess <path> [--declared-tier X]       run gate assessment, print/store result
-giml plan <path> [--profile cve_first]       full pipeline; leaves result branch + report
+giml plan <path> [--profile NAME]            full pipeline; leaves result branch + report
               [--max-builds N] [--max-minutes N] [--allow-detached] [--dry-run]
               [--rewind-to <commit>]         start from pom.xml at <commit> (section 5.3)
 giml report <run-id> [--format json|md]      re-render a stored report
 giml clean [--all] [--branches]              remove worktrees (and optionally branches)
 ```
+
+`--profile` overrides `planning.objective_profile`: `conservative_patch` (default) or `latest_first` (section 8.5).
 
 `--dry-run` performs preflight, assessment, and planning without building (lists candidate sets and reasons).
 
@@ -562,8 +588,18 @@ Written to `~/.giml/reports/<run-id>/report.json` and `report.md`, and summarise
 
 Contents:
 - Project, base SHA, branch, worktree path, snapshot ids, config version, tier (declared vs earned).
+- Objective profile used (section 8.5).
 - Result: changed dependencies (from → to) with reasons; held-back dependencies with reason and re-evaluation trigger; remaining CVEs (with severity, and why unresolved).
-- Comparison with the **naive baseline** (each dependency independently bumped to latest): builds spent, pass/fail, CVEs cleared.
+- A **reason line for every upgradable dependency**, touched or not, saying why it was or was not changed. Under `conservative_patch`, for example:
+  - "CVE-2025-1234 fixed by patch bump (2.17.1 → 2.17.3)"
+  - "CVE-2025-1234 fixed by minor bump (no patch-level fix exists)"
+  - "CVE-2025-1234 fixed by minor bump (patch-level fix failed `unit_test`)"
+  - "CVE-2025-1234 left open: no fixing version passed (`cve_patch` failed `compile`, `cve_minor` failed `startup`)"
+  - "no CVE, current version builds clean, left unchanged"
+  - "no CVE, patch bump attempted, build failed, reverted to current"
+  - "no CVE, patch bump needed alongside the CVE bump of `<coordinate>`"
+  Under `latest_first` the line names the chosen candidate (section 8.2) and, when it was demoted, the failure that demoted it.
+- Comparison with the **naive baseline** (each dependency independently bumped to latest): builds spent, pass/fail, CVEs cleared, and how many dependencies were touched at all (giml against naive).
 - Evidence per accepted step: stages passed, cache hits, timings, API-diff summary, new startup warnings.
 - Budget used and stop reason (and an explicit note if optimality is not guaranteed).
 - Rewind runs (section 5.3): the rewind commit, a clear "synthetic" label, and the per-dependency comparison of rewound, giml result and base-commit versions with CVE exposure.
@@ -632,8 +668,8 @@ Work in order; stop at each checkpoint.
 - Acceptance: repeated identical runs show cache hits; baseline failure is handled per section 9.1; signatures are stable across path/timestamp differences.
 
 **M5 — Deterministic planner (est. 2–3 weeks)**
-- Resolution via the dependency plugin's JSON output, candidate generation (section 8.2), lossless POM edits, joint search with delta-debugging isolation and re-promotion, ranking profiles, deferrals with triggers, japicmp-based candidate filtering, dry-run mode, naive-baseline comparison, result-branch commits, report generation including the rewind comparison (section 5.3).
-- Acceptance: on at least three real projects (including one deliberately behind on dependencies) the plan is produced with evidence; POM diffs of accepted steps touch only versions, `dependencyManagement` pins and, where the project allows them, exclusions (section 8.4); at least one project is run in rewind mode and its report compares giml's result with the base commit's versions; comparison with the naive baseline shows builds, pass rate and CVEs cleared; no CVE is silently left open by a pin; a project whose base commit fails `dependencyConvergence` (arete) ends with a clean enforcer run, or the report says exactly which violations remain and why.
+- Resolution via the dependency plugin's JSON output, candidate generation (section 8.2), lossless POM edits, the default `conservative_patch` search and the opt-in `latest_first` joint search with delta-debugging isolation and re-promotion (section 8.3), ranking profiles, per-dependency reason lines (section 14), deferrals with triggers, japicmp-based candidate filtering, dry-run mode, naive-baseline comparison, result-branch commits, report generation including the rewind comparison (section 5.3).
+- Acceptance: on at least three real projects (including one deliberately behind on dependencies) the plan is produced with evidence; POM diffs of accepted steps touch only versions, `dependencyManagement` pins and, where the project allows them, exclusions (section 8.4); at least one project is run in rewind mode and its report compares giml's result with the base commit's versions; comparison with the naive baseline shows builds, pass rate, CVEs cleared and how few dependencies were touched at all (giml's count against the naive baseline's, since touching only what is needed, rather than bumping everything to latest, is the differentiator to demonstrate); every dependency in the report has a reason line; no CVE is silently left open by a pin; a project whose base commit fails `dependencyConvergence` (arete) ends with a clean enforcer run, or the report says exactly which violations remain and why.
 
 **M6 — Startup verification (est. 1–2 weeks)**
 - Settings loader/validator (section 12.1), smoke runner (12.2), PostgreSQL lifecycle (12.3), baseline handling, integration into the pipeline and tier evaluation.
