@@ -619,7 +619,7 @@ Contents:
 - Result: changed dependencies (from → to) with reasons; held-back dependencies with reason and re-evaluation trigger; remaining CVEs (with severity, and why unresolved).
 - A **reason line for every upgradable dependency**, touched or not, saying why it was or was not changed. Under `conservative`, for example:
   - "CVE-2025-1234 fixed by patch bump (2.17.1 → 2.17.3)"
-  - "CVE-2025-1234 fixed by minor bump (no patch-level fix exists)"
+  - "CVE-2025-1234 fixed by minor bump (no patch-level version clears everything)"
   - "CVE-2025-1234 fixed by minor bump (patch-level fix failed `unit_test`)"
   - "CVE-2025-1234 left open: no fixing version passed (`cve_patch` failed `compile`, `cve_minor` failed `startup`)"
   - "CVE-2025-1234 left open: the only fix is a major update (2.x to 3.0.1) and `major_updates` is `disallowed`"

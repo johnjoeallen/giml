@@ -71,7 +71,7 @@ def test_minor_fix_says_why_there_is_no_patch_fix_and_lists_every_cve():
     dep = resolved("o:l", "2.17.1", [finding("A", "o:l", "2.17.1"), finding("B", "o:l", "2.17.1", cves=[])])
     p = plan(dep, "fix_available", [candidate(["cve_minor"], "2.18.0")])
     assert reason_of(one_dep(dep, p), "o:l") == (
-        "B, CVE-A fixed by a minor bump (2.17.1 → 2.18.0; no patch-level fix exists); a candidate, not built (dry run)")
+        "B, CVE-A fixed by a minor bump (2.17.1 → 2.18.0; no patch-level version clears everything); a candidate, not built (dry run)")
 
 
 def test_fix_after_a_blocked_step_names_the_first_usable_one():
@@ -183,6 +183,25 @@ def test_missing_metadata_is_listed_with_the_command_that_fixes_it():
     report = build_report(inputs([dep, other], [plan(dep, "no_metadata"), plan(other, "no_metadata")]))
     assert report["missing_metadata"] == ["o:l", "o:ok"]
     assert report["sync_command"] == "giml sync --central --coordinate o:l --coordinate o:ok"
+
+
+def test_the_same_coordinate_at_two_versions_is_listed_once_for_syncing():
+    a, b = resolved("o:l", "1", [finding("A", "o:l", "1")]), resolved("o:l", "2", [finding("B", "o:l", "2")])
+    report = build_report(inputs([a, b], [plan(a, "no_metadata"), plan(b, "no_metadata")]))
+    assert report["missing_metadata"] == ["o:l"]
+    assert report["sync_command"] == "giml sync --central --coordinate o:l"
+
+
+def test_many_advisories_are_abbreviated_in_reason_lines_but_kept_in_full_in_the_data():
+    findings = [finding(f"A{i}", "o:l", "1", cves=[f"CVE-{i:02d}"]) for i in range(13)]
+    dep = resolved("o:l", "1", findings)
+    report = one_dep(dep, plan(dep, "no_fix"))
+    assert reason_of(report, "o:l") == "CVE-00, CVE-01, CVE-02 and 10 more left open: no version that clears it is available"
+    assert len(report["dependencies"][0]["advisories"]) == 13
+    three = resolved("o:t", "1", findings[:3])
+    assert reason_of(one_dep(three, plan(three, "no_fix")), "o:t").startswith("CVE-00, CVE-01, CVE-02 left open")
+    four = resolved("o:f", "1", findings[:4])
+    assert reason_of(one_dep(four, plan(four, "no_fix")), "o:f").startswith("CVE-00, CVE-01, CVE-02 and 1 more left open")
 
 
 def test_header_fields_and_declaration_notes():

@@ -28,7 +28,7 @@ These are enforced by code and tests, not just convention:
 - Milestone: **M3 (Gate assessment) complete, awaiting review** (2026-09-24). `giml assess`, the survey script and per-project JDK choice are done; the survey ran on redkite, arete and grip (all below Tier B; grip closest at line 86.7%, strength 78.6%); Q7 and Q8 answered. Next: M4, build runner, cache and outcome logging.
 - M1 accepted 2026-09-24. M2 checkpoint recorded (dff9705); work then continued into M3.
 - Self-gate during M3: Tier B PASS (line 99.4%, branch 97.2%, test strength 90.4%, mutation coverage 89.9%, excluded share 2.6%, 0 flaky of 5 runs).
-- Current work (2026-09-25): **M5a, the analysis half of M5 (`giml plan --dry-run`)**, done before M4 (spec §17). M3 still awaits the user's acceptance. redkite earned Tier A at `970df7f` (line 97.1, branch 91.5, strength 92.8, mutation 91.3).
+- Current work (2026-09-25): **M5a, the analysis half of M5 (`giml plan --dry-run`)**, done before M4 (spec §17): resolve, declarations, exposure, candidates, report and the CLI are in and work on real projects. Known gap: parent/BOM upgrade candidates (spec §8.2), the main lever for Spring Boot projects such as grip and arete. M3 still awaits the user's acceptance. redkite earned Tier A at `970df7f` (line 97.1, branch 91.5, strength 92.8, mutation 91.3).
 - Update this line and the log below at each checkpoint.
 
 ## Build and test commands
@@ -43,6 +43,7 @@ Record here only commands that have actually been run successfully. Verified wit
 - Workspace commands (M2): `.venv/bin/giml --state-dir <dir> plan <project> [--rewind-to <commit>]`, `giml status`, `giml clean <project> [--branches]`. Try them on a scratch `git clone` of a real project, never the original.
 - Assess (M3): `.venv/bin/giml --state-dir <dir> [--config <global.yml>] assess <project> [--declared-tier B]`. Runs Maven, JaCoCo and PIT; a real project takes minutes.
 - Survey (M3): `.venv/bin/python scripts/survey.py --state-dir <dir> [--config <global.yml>] <clone> [<clone> ...]` on scratch clones; writes `<dir>/reports/survey-<UTC>.md`.
+- Dry-run analysis (M5a): `.venv/bin/giml --state-dir <dir> sync --osv`, then `.venv/bin/giml --state-dir <dir> plan --dry-run <project> [--strategy conservative|latest] [--scope cve|general] [--major-updates disallowed|allowed|ml]`. Builds nothing (Maven only resolves trees, seconds). The report names the coordinates that need `giml sync --central --coordinate ...`; run that and plan again. Reports land in `<dir>/reports/<run-id>/report.{json,md}`. Without a valid assessment (`giml assess`) it lists findings only and proposes nothing.
 - Real sync into a throwaway state dir: `.venv/bin/giml --state-dir <dir> sync --coordinate com.fasterxml.jackson.core:jackson-databind` then `.venv/bin/giml --state-dir <dir> status` (about 6 s; OSV zip about 10 MB)
 
 ## Layout

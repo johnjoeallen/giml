@@ -22,6 +22,7 @@ from giml.plan.exposure import ResolvedDependency, TreeExposure
 
 _DRY_RUN = "a candidate, not built (dry run)"
 _REPORT_ONLY = "report only: no usable tier, so nothing is proposed"
+_LABELS_SHOWN = 3
 _DEFAULT_STATUSES = ("fix_available", "fix_blocked_major", "no_fix", "update_available")
 
 
@@ -77,14 +78,16 @@ def _advisories(findings: Sequence[Finding]) -> list[dict]:
 
 
 def _labels(findings: Sequence[Finding]) -> str:
-    return ", ".join(sorted({cve for f in findings for cve in (f.cves or (f.advisory_id,))}))
+    """The advisories by CVE id (or advisory id), the first few in full and a count of the rest."""
+    labels = sorted({cve for f in findings for cve in (f.cves or (f.advisory_id,))})
+    return ", ".join(labels) if len(labels) <= _LABELS_SHOWN else f"{', '.join(labels[:_LABELS_SHOWN])} and {len(labels) - _LABELS_SHOWN} more"
 
 
 def _bump(kind: str, current: str, candidate: Candidate, candidates: Sequence[Candidate]) -> str:
     level = {"cve_patch": "patch", "cve_minor": "minor", "cve_major": "major"}[kind]
     present = {k for c in candidates for k in c.kinds}
     missing = [name for name, k in (("patch", "cve_patch"), ("minor", "cve_minor")) if k not in present and name != level]
-    lower = "no patch-level fix exists" if level == "minor" else "no patch- or minor-level fix exists"
+    lower = "no patch-level version clears everything" if level == "minor" else "no patch- or minor-level version clears everything"
     note = f"; {lower}" if level != "patch" and missing else ""
     return f"a {level} bump ({current} → {candidate.version}{note})"
 
@@ -187,7 +190,7 @@ def build_report(inputs: ReportInputs) -> dict:
     dependencies = sorted(inputs.exposure.dependencies, key=_worst_first)
     entries = [_entry(inputs, d, plans[(d.coordinate, d.version)]) for d in dependencies]
     statuses = [e["status"] for e in entries]
-    missing = sorted(e["coordinate"] for e in entries if e["status"] == "no_metadata")
+    missing = sorted({e["coordinate"] for e in entries if e["status"] == "no_metadata"})
     exposure = inputs.exposure.exposure
     return {
         "kind": "dry_run", "project": inputs.project, "base_sha": inputs.base_sha, "run_id": inputs.run_id,
