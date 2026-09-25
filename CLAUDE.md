@@ -55,6 +55,7 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 - State DB: `<state>/state.db`; migrations 0001 (`snapshot`) and 0002 (`project`, `run` with only the columns used so far). Other spec §11 tables and columns arrive with their milestones.
 - `src/giml/git/` holds the git wrapper, preflight, lock, worktrees and rewind; `src/giml/workspace.py` orchestrates `plan` (M2 stub), `clean` and crashed-run detection. `src/giml/maven/project.py` discovers the reactor (root pom plus modules, including profile modules).
 - `src/giml/gate/` holds tooling setup, report collectors, tiers and `assess`; `src/giml/maven/runner.py` runs Maven; `src/giml/maven/jdk.py` chooses the JDK (spec §3.1). `scripts/survey.py` tabulates assessments across projects.
+- M5a analysis modules: `src/giml/maven/tree.py` (resolved trees from the pinned plugin's JSON) and `src/giml/maven/declarations.py` (where each version is declared: literal, property, managed, external parent/BOM; read-only, records the editable text span). Fixtures: `tests/fixtures/trees/`, `tests/fixtures/poms/redkite/` (real).
 - Config files: gate config (package), global `~/.giml/config.yml` (`jdks` only), project `.giml/settings.yml` (`jdk` or `java_home`, `allow_exclusions`), all parsed in `src/giml/core/config.py`.
 - Platform requirements and how giml stays out of the developer's checkout: `docs/platform.md`.
 
