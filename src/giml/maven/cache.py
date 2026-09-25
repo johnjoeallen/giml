@@ -29,7 +29,7 @@ from giml.maven.build import StageOutcome
 from giml.maven.failures import INFRASTRUCTURE, TIMEOUT, Failure
 from giml.store.result_cache import canonical_json
 
-SCHEMA = 1
+SCHEMA = 2
 _NOT_CACHED = (INFRASTRUCTURE, TIMEOUT)
 _MAVEN_VERSION = re.compile(r"Apache Maven (\S+)")
 
@@ -110,13 +110,13 @@ class CacheMetrics:
 def _entry(outcome: StageOutcome) -> dict[str, Any]:
     failure = outcome.failure
     return {"schema": SCHEMA, "stage": outcome.stage, "passed": outcome.passed, "duration_seconds": outcome.duration_seconds,
-            "log": str(outcome.log_path),
+            "log": str(outcome.log_path), "details": outcome.details,
             "failure": {"class": failure.failure_class, "signature": failure.signature, "key_lines": list(failure.key_lines)}
             if failure else None}  # fmt: skip
 
 
 def _valid(entry: dict[str, Any] | None) -> bool:
-    return entry is not None and entry.get("schema") == SCHEMA and {"stage", "passed", "duration_seconds", "log", "failure"} <= entry.keys()
+    return entry is not None and entry.get("schema") == SCHEMA and {"stage", "passed", "duration_seconds", "log", "failure", "details"} <= entry.keys()
 
 
 class CachingBuildRunner:
@@ -153,4 +153,4 @@ class CachingBuildRunner:
         log.write_text(text, encoding="utf-8")
         self._metrics.record(stage, True, entry["duration_seconds"])
         restored = Failure(failure["class"], failure["signature"], tuple(failure["key_lines"])) if failure else None
-        return StageOutcome(stage, entry["passed"], entry["duration_seconds"], log, restored, cache_hit=True)
+        return StageOutcome(stage, entry["passed"], entry["duration_seconds"], log, restored, cache_hit=True, details=entry["details"])

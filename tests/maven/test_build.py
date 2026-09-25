@@ -67,6 +67,26 @@ def test_failures_are_classified_from_the_log(tmp_path, stage, log, failure_clas
     assert len(outcome.signature) == 16 and outcome.failure.key_lines and not outcome.retryable
 
 
+def test_the_enforcer_stage_reports_its_violations_structured(tmp_path):
+    run, _ = runner(tmp_path, captured("convergence"))
+    outcome = run.run_stage(tmp_path / "wt", "enforcer", 60)
+    (violation,) = outcome.violations
+    assert (violation.rule, violation.subject) == ("DependencyConvergence", "com.fasterxml.jackson.core:jackson-core")
+    assert outcome.details == {"violations": [violation.to_dict()]}
+
+
+def test_a_passing_enforcer_stage_has_no_violations_and_other_stages_have_no_details(tmp_path):
+    run, _ = runner(tmp_path)
+    assert run.run_stage(tmp_path / "wt", "enforcer", 60).details == {"violations": []}
+    assert run.run_stage(tmp_path / "wt", "compile", 60).details is None
+    assert run.run_stage(tmp_path / "wt", "compile", 60).violations == ()
+
+
+def test_a_failing_stage_other_than_the_enforcer_has_no_details(tmp_path):
+    run, _ = runner(tmp_path, captured("compile-error"))
+    assert run.run_stage(tmp_path / "wt", "compile", 60).details is None
+
+
 def test_a_timeout_is_a_timeout(tmp_path):
     run, _ = runner(tmp_path, ("timeout", "partial log\n"))
     outcome = run.run_stage(tmp_path / "wt", "unit_test", 60)

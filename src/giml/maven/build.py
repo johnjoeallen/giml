@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from giml.maven.enforcer import Violation, parse_enforcer
 from giml.maven.failures import INFRASTRUCTURE, Failure, classify
 from giml.maven.runner import Env, MavenRunner
 
@@ -31,6 +33,12 @@ class StageOutcome:
     log_path: Path
     failure: Failure | None  # None when the stage passed
     cache_hit: bool = False  # answered from the result cache, with the original timing (spec 10)
+    details: dict[str, Any] | None = None  # JSON-able extras that must survive the cache: the enforcer's violations
+
+    @property
+    def violations(self) -> tuple[Violation, ...]:
+        """The enforcer stage's violations (spec 9.1); empty for every other stage."""
+        return tuple(Violation.from_dict(v) for v in (self.details or {}).get("violations", []))
 
     @property
     def failure_class(self) -> str | None:
@@ -58,6 +66,9 @@ class MavenBuildRunner:
         log = self.logs_dir / f"{self._runs:02d}-{stage}.log"
         result = self.maven(worktree, list(STAGES[stage]), log, timeout_seconds, self.env)
         if result.succeeded:
-            return StageOutcome(stage, True, result.duration_seconds, result.log_path, None)
-        failure = classify(result.log_path.read_text(encoding="utf-8", errors="replace"), result.timed_out)
-        return StageOutcome(stage, False, result.duration_seconds, result.log_path, failure)
+            return StageOutcome(stage, True, result.duration_seconds, result.log_path, None,
+                                details={"violations": []} if stage == "enforcer" else None)  # fmt: skip
+        text = result.log_path.read_text(encoding="utf-8", errors="replace")
+        details = {"violations": [v.to_dict() for v in parse_enforcer(text)]} if stage == "enforcer" else None
+        return StageOutcome(stage, False, result.duration_seconds, result.log_path, classify(text, result.timed_out),
+                            details=details)  # fmt: skip

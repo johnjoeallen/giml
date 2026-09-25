@@ -1,0 +1,62 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ------------------------------< t:multi >-------------------------------
+[INFO] Building multi 1
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- enforcer:3.6.3:enforce (giml) @ multi ---
+[INFO] Rule 3: org.apache.maven.enforcer.rules.BanDuplicatePomDependencyVersions passed
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  0.668 s
+[INFO] Finished at: 2026-09-25T13:21:55+01:00
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal org.apache.maven.plugins:maven-enforcer-plugin:3.6.3:enforce (giml) on project multi: 
+[ERROR] Rule 0: org.apache.maven.enforcer.rules.dependency.DependencyConvergence failed with message:
+[ERROR] Failed while enforcing releasability.
+[ERROR] 
+[ERROR] Dependency convergence error for com.fasterxml.jackson.core:jackson-core:jar:2.15.0. Paths to dependency are:
+[ERROR] +-t:multi:jar:1
+[ERROR]   +-com.fasterxml.jackson.core:jackson-databind:jar:2.15.0:compile
+[ERROR]     +-com.fasterxml.jackson.core:jackson-core:jar:2.15.0:compile
+[ERROR] and
+[ERROR] +-t:multi:jar:1
+[ERROR]   +-com.fasterxml.jackson.core:jackson-core:jar:2.13.0:compile
+[ERROR] 
+[ERROR] Rule 1: org.codehaus.mojo.extraenforcer.dependencies.BanDuplicateClasses failed with message:
+[ERROR] Duplicate classes found:
+[ERROR] 
+[ERROR]   Found in:
+[ERROR]     commons-logging:commons-logging:jar:1.2:compile
+[ERROR]     org.slf4j:jcl-over-slf4j:jar:1.7.36:compile
+[ERROR]   Duplicate classes:
+[ERROR]     org/apache/commons/logging/impl/SimpleLog$1.class
+[ERROR]     org/apache/commons/logging/LogConfigurationException.class
+[ERROR] 
+[ERROR]   Found in:
+[ERROR]     commons-logging:commons-logging:jar:1.2:compile
+[ERROR]     org.slf4j:jcl-over-slf4j:jar:1.7.36:compile
+[ERROR]     org.springframework:spring-jcl:jar:6.1.14:compile
+[ERROR]   Duplicate classes:
+[ERROR]     org/apache/commons/logging/Log.class
+[ERROR]     org/apache/commons/logging/impl/NoOpLog.class
+[ERROR]     org/apache/commons/logging/impl/SimpleLog.class
+[ERROR]     org/apache/commons/logging/LogFactory.class
+[ERROR] 
+[ERROR]   Found in:
+[ERROR]     commons-logging:commons-logging:jar:1.2:compile
+[ERROR]     org.springframework:spring-jcl:jar:6.1.14:compile
+[ERROR]   Duplicate classes:
+[ERROR]     org/apache/commons/logging/LogFactory$1.class
+[ERROR] 
+[ERROR] Rule 2: org.apache.maven.enforcer.rules.version.RequireJavaVersion failed with message:
+[ERROR] Detected JDK /home/dev/.sdkman/candidates/java/21.0.9-tem is version 21.0.9 which is not in the allowed range [99,).
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoExecutionException

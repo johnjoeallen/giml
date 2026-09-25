@@ -8,7 +8,7 @@ from giml.maven.build import StageOutcome
 from giml.maven.cache import (
     BuildEnvironment, CacheMetrics, CachingBuildRunner, maven_version, stage_key_parts, tooling_fingerprint,
 )  # fmt: skip
-from giml.maven.failures import COMPILE, INFRASTRUCTURE, TIMEOUT, UNKNOWN, Failure
+from giml.maven.failures import COMPILE, ENFORCER_CONVERGENCE, INFRASTRUCTURE, TIMEOUT, UNKNOWN, Failure
 from giml.store.result_cache import FileResultCache
 from tests.git.repo_helpers import git, make_repo
 
@@ -172,6 +172,16 @@ def test_a_different_stage_or_content_is_a_miss(tmp_path, repo):
     (repo / "pom.xml").write_text("<project><version>2</version></project>\n")
     assert not runner.run_stage(repo, "unit_test", 60).cache_hit
     assert len(inner.calls) == 3
+
+
+def test_details_such_as_enforcer_violations_survive_the_cache(tmp_path, repo):
+    outcome = StageOutcome("enforcer", False, 3.0, Path("/orig/03.log"), Failure(ENFORCER_CONVERGENCE, "sig0sig0sig0sig0", ("x",)),
+                           details={"violations": [{"rule": "DependencyConvergence", "subject": "g:a", "detail": {"versions": ["1", "2"]}}]})  # fmt: skip
+    runner, inner = caching(tmp_path, repo, outcome)
+    runner.run_stage(repo, "enforcer", 60)
+    hit = runner.run_stage(repo, "enforcer", 60)
+    assert hit.cache_hit and len(inner.calls) == 1
+    assert hit.details == outcome.details and [v.subject for v in hit.violations] == ["g:a"]
 
 
 def test_a_result_is_shared_between_worktrees_with_the_same_content(tmp_path, repo):
