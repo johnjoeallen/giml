@@ -45,7 +45,7 @@ In scope:
 - Data sources: OSV and Maven Central only.
 - Deterministic planner: minimal per-dependency steps by default (CVE-clearing bumps; otherwise patch or minor steps only when needed), with joint sets, pins and bisection where bumps interact.
 - Tier assessment (JaCoCo + PIT), startup verification, outcome logging.
-- CPU-only ML layer (milestone 8+) with no AI API calls, added only if it measurably reduces builds per accepted upgrade.
+- CPU-only ML layer (milestone 8+) with no AI API calls, added only if it measurably reduces builds per accepted upgrade. It is an optimisation and triage layer on top of the deterministic engine, never a precondition for correct upgrades (section 16).
 
 Out of scope for phase 1:
 - PR/MR creation, CI integration, central service, GPU training, LoRA/generative fine-tuning.
@@ -68,7 +68,7 @@ Later the same engine will run centrally, from CI, and open PRs. Therefore all e
 5. **Never execute commands taken from repository files.** Repo files may declare *data* (profile name, readiness hints) but never *what to run*. One deliberate exception (decided 2026-09-24): a project's `.giml/settings.yml` may name a `java_home`, and giml builds with that JDK if the directory looks like one (has `bin/javac`); see section 3.1.
 6. **Never log or report secret values.** Record environment variable *names* only.
 7. **Verification rules come from the base commit**, never from a candidate state, so an upgrade cannot change its own checks.
-8. **Every suggestion is verified by a real build.** ML output is a prior for ordering and abstention, never a verdict.
+8. **Every suggestion is verified by a real build.** ML output is a prior for skipping, ordering and triage, never a verdict.
 
 ---
 
@@ -162,7 +162,7 @@ Define these in `giml.core` as `typing.Protocol` classes. Implement only the loc
 | `ResultCache` | local content-addressed directory | shared cache service |
 | `PublishTarget` | writes report + leaves branch | opens/updates PRs |
 | `SmokeSettingsProvider` | reads `.redkite/settings.yml` | any other source |
-| `RiskScorer` | deterministic heuristic | trained model |
+| `RiskScorer` | deterministic default that always abstains (never skips) | trained model (skip-ahead predictor, section 16) |
 | `AdvisorySource` | local OSV snapshot | shared advisory service |
 | `ArtifactMetadataSource` | local Maven Central snapshot | shared |
 
@@ -475,7 +475,7 @@ A **major update** changes the first numeric component of a dependency's resolve
 
 - **Where the gate applies:** to the candidate's **resolved tree** (section 8.1), compared with the base commit's, so a major change that arrives indirectly, through a parent or BOM upgrade or as a transitive of an accepted version, counts as much as a direct one. It is a filter applied before any build: a blocked candidate costs no build, is recorded (section 15) as `blocked_major_update`, and appears in the report. Forced moves (section 8.2), which use only `next_patch` and `next_minor`, are never major.
 - **Effect on results:** a CVE whose only fix is a major update stays open, and an enforcer violation whose only fix is a major update stays unresolved (section 8.5). Each is reported with its reason and a re-evaluation trigger (a new release fixing it within the current major, a change of `major_updates`, or ML evidence).
-- **`ml` before the ML layer exists:** until a trained scorer is loaded (milestone 8+), or when it has no evidence for the dependency or abstains, `ml` behaves exactly as `disallowed` and the report says "no ML evidence". The default is therefore safe with or without ML.
+- **`ml` before the ML layer exists:** until a trained model is loaded (milestone 8+), or when it has no evidence for the dependency or abstains, `ml` behaves exactly as `disallowed` and the report says "no ML evidence". The default is therefore safe with or without ML.
 - **Test scope** (decided 2026-09-25): `planning.major_updates_test_scope` is `disallowed` (default) or `allowed` (`--major-updates-test-scope` overrides it). With `allowed`, a major change in a dependency whose every appearance in the resolved tree is test scope does not count against the gate, whatever `major_updates` says: it can break the test suite but not the shipped application, and the build verifies it. It applies to a dependency's own major fix and to majors that arrive through a parent or BOM. A dependency that is also compile, runtime or provided anywhere, or whose scope is unknown, is never exempt. With `disallowed`, a blocked test-only dependency is named as such in the reason, so the option is easy to find.
 - **ML is a prior, never a verdict** (hard rule 8): an allowed major update is still verified by a real build (section 9) like any other candidate. giml edits POM files only (section 8.4), so an accepted major update by construction needs no change to the developer's code for the build and tests to pass.
 
@@ -672,7 +672,9 @@ From milestone 4, every attempt is logged as a labelled example:
 
 ## 16. Machine learning (milestone 8+, CPU only, no AI API calls)
 
-Only added once logged data exists. Each layer must be judged against the deterministic baseline on **median builds per accepted upgrade** and **false-fix rate**. If a layer does not help, the report says so and it stays off.
+**Scope of ML** (decided 2026-09-25). Under the default `conservative` strategy the search space is small: each dependency has a short, fixed ladder (patch, then minor, then major where permitted; section 8.3) that is already in the right order, and every accepted step is verified by a real build. Correctness therefore comes from the deterministic engine: the ladder, the build oracle, the gates and the tier. ML is an **optimisation and triage layer on top of it**: it can save builds by skipping a step that is very likely to fail, and it can point a human at results worth a second look. It is not a precondition for correct upgrades. With ML absent, or every layer switched off, the planner produces the same verified result, only with more builds and without triage. That is the claim to make about it, and the evaluation below is how it is earned or dropped.
+
+Only added once logged data exists. Each layer must be judged against the deterministic baseline, and if a layer does not help, the report says so and it stays off. The headline measures are **median builds per accepted upgrade**, the **false-skip rate** (steps the predictor skipped that would have passed) and the **abstention rate**; ML that saves builds by being wrong more often than it is right is not an improvement.
 
 Constraints:
 - No AI API calls at train or inference time, enforced by a test. Any pretrained weights are downloaded once during setup, stored locally with a checksum, and loaded from disk.
@@ -681,14 +683,14 @@ Constraints:
 
 Layers, in order:
 1. **Failure classifier**: TF-IDF + logistic regression baseline, then a small PyTorch model over error signatures.
-2. **Retrieval**: local embeddings of error signatures + dependency context; kNN over past failures and their fixes; measure recall@k. CPU inference only.
-3. **Candidate ranker / breakage-risk scorer**: MLP or gradient-boosted model over structured features (semver distance, release age, BOM membership, co-occurrence, API diff). Orders candidate states to try likeliest-to-pass first.
-4. **Abstention**: calibrated confidence; below threshold → "needs human"; report the false-fix rate as a headline metric.
+2. **Skip-ahead / pass-fail predictor** (replaces the earlier candidate ranker, which would only have re-ordered a list that is already in the right order): predicts whether the *next* candidate will pass its next stage, from structured features (semver distance, release age, BOM membership, co-occurrence, API diff, prior knowledge counts, tier and oracle strength) plus the retrieval features of layer 3. MLP or gradient-boosted model. Two uses. **Skip:** when it is confident a step will fail, the engine does not build it and moves on, saving the build; the skip is recorded and reported with its confidence, and if the ladder would otherwise end without a fix for a CVE, the skipped steps are built anyway, so a wrong skip can cost a larger bump than necessary but can never silently leave a CVE open or produce an unverified change. **Escalate:** when it is confident every remaining step of a lower level will fail, the engine goes straight to the next level. Under `latest` (section 8.3), where the search space is larger, it can also order the demotion candidates. It runs in **shadow mode** (predicting without acting, compared with the real outcomes) until its false-skip rate on held-out data is acceptable.
+3. **Retrieval**: local embeddings of error signatures and dependency context; kNN over past failures and their fixes. It feeds the predictor with similar-but-not-identical past failures (for example the failure rate of look-alike transitions, and whether a known fixing pin or demotion exists) and shows the closest past failures next to a failure in the report. It is not a source of suggestions on its own: a retrieved fix is only a candidate and is verified like any other. Measured by recall@k and, more importantly, by how much the predictor improves with the retrieval features. CPU inference only.
+4. **Abstention and review-worthiness**: calibrated confidence for the predictor (below its threshold the engine does not skip, and the item is marked "needs human"), and a **separate review-worthiness signal on passing builds**: a step that passes can still deserve a second look, for example when the API diff shows breaking changes in classes the project uses, new startup warnings appear, the tests barely cover the touched code, the version jump is large, or a similar past transition passed only after a fix. It is reported as "review suggested" with its reasons, never blocks or unblocks anything by itself, and is kept apart from the pass/fail prediction: a pass with a high review score is still a pass. Measured by the false-skip rate and abstention rate (headline) and, for review-worthiness, by its precision against later human fixes and reverts recorded in the dataset (section 15).
 5. (Optional, later) small encoder fine-tune on CPU. LoRA on large models is out of scope.
 
-**Major-update gate** (section 8.7): under `major_updates: ml`, the scorer of layer 3 also answers, per dependency and version jump, whether the update needs developer code changes, and layer 4 abstains below the confidence threshold. The label comes from real builds and from later human fixes recorded in the dataset (section 15). An abstention means no.
+**Major-update gate** (section 8.7): under `major_updates: ml`, the predictor (layer 2), with retrieval evidence (layer 3), also answers, per dependency and version jump, whether the update needs developer code changes, and layer 4 abstains below the confidence threshold. The label comes from real builds and from later human fixes recorded in the dataset (section 15). An abstention means no.
 
-Engine integration: the `RiskScorer` interface with `DeterministicRiskScorer` (default) and `ModelRiskScorer` (a trained model loaded from disk in-process). Swappable by config; the planner works with ML dependencies absent.
+Engine integration: the `RiskScorer` interface (section 4.2) returns the estimated probability that a candidate fails its next stage, or nothing (abstains). `DeterministicRiskScorer` (default) always abstains, so nothing is ever skipped and the engine is exactly the deterministic one; `ModelRiskScorer` is a trained model loaded from disk in-process. Swappable by config; the planner works with ML dependencies absent.
 
 ---
 
@@ -734,7 +736,7 @@ Work in order; stop at each checkpoint.
 - Definition of done: runs end to end with no AI API calls and planning reading only snapshots; each project gets a tier and a report; measured comparison against the naive baseline; cache hit rate and timings recorded across repeated runs.
 
 **M8+ — ML layers (section 16)**
-- Each layer is its own checkpoint with an evaluation report against the deterministic baseline (builds per accepted upgrade, false-fix rate, abstention rate, by tier).
+- Each layer is its own checkpoint with an evaluation report against the deterministic baseline (builds per accepted upgrade, false-skip rate, abstention rate, precision of "review suggested", by tier). Layer 2 runs in shadow mode first.
 
 ---
 
