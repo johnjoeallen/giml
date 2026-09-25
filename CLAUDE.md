@@ -62,6 +62,7 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 
 Newest first. One line each: date, decision, reason.
 
+- 2026-09-25: "CVE first" is an ordering rule, not a profile: in every profile CVE-affected dependencies are settled before general updates, and CVE remediation always climbs the ladder patch, then minor, then major (spec §8.2, §8.3). `latest_first` therefore runs the CVE ladder as phase 1, then its joint downward search; `cve_minimal` is gone. Gate config default is `conservative_patch` (config version stays 3: planning settings are not gate thresholds). User clarification.
 - 2026-09-25: Milestones reordered: the no-build analysis of M5 (resolve, CVE exposure, candidate ladder, report; `plan --dry-run`) is M5a and comes before M4, since redkite already meets Tier A and analysis needs no build machinery. Rewind comparison stays last. User choice.
 - 2026-09-24: The planner may add `<exclusion>`s to fix enforcer violations only when the project's `.giml/settings.yml` sets `allow_exclusions: true` (default false); parsed now, used from M5 (spec §8.4). User choice.
 - 2026-09-24: A clean enforcer run is required to finish a plan, not to start one. Baseline violations are recorded and become planning goals (pins per §8.4); candidates may not add violations; fewer violations ranks first in every profile; a run left with violations exits 1 with its progress on the branch. User instruction.

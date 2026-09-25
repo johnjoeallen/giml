@@ -33,7 +33,7 @@ def test_default_config_loads_as_specified():
         "when_present", "when_configured",
     )  # fmt: skip
     assert config.shared.flake_check_runs == 5
-    assert config.planning.objective_profile == "cve_first"
+    assert config.planning.objective_profile == "conservative_patch"
     assert config.planning.release_cooldown_days == 7
     assert config.warnings == ()
 

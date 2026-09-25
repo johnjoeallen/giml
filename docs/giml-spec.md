@@ -373,15 +373,16 @@ For each dependency version that is *declared or managed* in the project, build 
 | Candidate | Version | `conservative_patch` (default) | `latest_first` (opt-in) |
 |---|---|---|---|
 | `current` | no change | every dependency | every dependency |
-| `cve_patch` | lowest version within the current major.minor that clears | CVE-affected, ladder step 1 | – |
-| `cve_minor` | lowest version with a higher minor, same major, that clears | CVE-affected, step 2, only if no `cve_patch` exists or it failed | – |
-| `cve_major` | lowest version with a higher major that clears | CVE-affected, step 3, only if no `cve_minor` exists or it failed | – |
-| `cve_minimal` | the first of `cve_patch`, `cve_minor`, `cve_major` that exists | – | CVE-affected |
+| `cve_patch` | lowest version within the current major.minor that clears | CVE-affected, ladder step 1 | CVE-affected, ladder step 1 |
+| `cve_minor` | lowest version with a higher minor, same major, that clears | CVE-affected, step 2, only if no `cve_patch` exists or it failed | CVE-affected, step 2 (same rule) |
+| `cve_major` | lowest version with a higher major that clears | CVE-affected, step 3, only if no `cve_minor` exists or it failed | CVE-affected, step 3 (same rule) |
 | `next_patch` | lowest newer version within the current major.minor | not CVE-affected, when needed (section 8.3) | – |
 | `next_minor` | lowest version with a higher minor, same major | not CVE-affected, only if no `next_patch` exists | – |
 | `latest_in_major` | newest release within the current major | – | every dependency |
 | `bom_managed` | the version managed by the project's parent/BOM (e.g. Spring Boot) after any parent upgrade | – | every dependency |
 | `latest` | newest overall release | never | every dependency |
+
+**CVE remediation uses the same ladder in every profile** (decided 2026-09-25): patch first, then minor, then major, to find the smallest fix that works. Profiles differ only in how they treat general, non-CVE updates. "CVE first" is an ordering rule that holds in every profile, not a profile of its own: CVE-affected dependencies are settled before any general update is attempted (section 8.3).
 
 Under `conservative_patch`, a dependency that is not CVE-affected never gets a major step or `latest`.
 
@@ -402,7 +403,7 @@ A **state** maps each upgradable dependency to a chosen version. The objective p
 
 Stop conditions (first that occurs): every CVE-affected dependency has an accepted step or has exhausted its ladder, the enforcer goals are met or exhausted, and the combined state passes; `max_builds` or `max_wall_minutes` exhausted (the report states which ladders were not finished). There is no re-promotion: a dependency never goes past the first step that passes.
 
-**`latest_first` (opt-in): joint search down from the aspirational state.** Start with the aspirational state (best per the `latest_first` ranking, section 8.5) and search downward:
+**`latest_first` (opt-in): CVEs first, then a joint search down from the aspirational state.** Phase 1 is CVE remediation exactly as in `conservative_patch` steps 1 and 3: each CVE-affected dependency climbs its ladder (`cve_patch`, `cve_minor`, `cve_major`) and the accepted steps are combined and verified, before any general update is attempted. The result is the CVE-settled state. Phase 2 starts from the aspirational state for the remaining dependencies (best per the `latest_first` ranking, section 8.5), holds each CVE-affected dependency no lower than its accepted ladder step, and searches downward:
 
 1. Build and verify the aspirational state (section 9).
 2. If it passes, it becomes the result (subject to commit rules, section 5.2).
@@ -429,7 +430,7 @@ Eligible states are then chosen by an **objective profile** (`planning.objective
 
 `conservative_patch` (default): no whole-state ranking. Each dependency's version is decided by its ladder (sections 8.2 and 8.3), and the first passing step wins, so the result is the smallest verified change that clears known CVEs. The only comparison is between combinations of interacting bumps that cannot all be kept (section 8.3, step 3): after enforcer violations, lowest CVE exposure (as `latest_first` criterion 1), then fewest changed declarations. Version lag and recency are never objectives.
 
-`latest_first` (opt-in; named `cve_first` before 2026-09-25, when it was the default), ranked lexicographically:
+`latest_first` (opt-in; named `cve_first` before 2026-09-25, when it was the default; that name meant only "CVEs before general updates", which now holds in every profile, section 8.2), ranked lexicographically:
 1. Lowest CVE exposure over the **fully resolved tree**: maximum severity remaining, then count of vulnerabilities at that severity, then total count (OSV severity data).
 2. Smallest total version lag (or most dependencies at newest permitted version).
 3. Smallest diff (fewest changed declarations).

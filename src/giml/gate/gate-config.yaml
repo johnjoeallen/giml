@@ -32,4 +32,4 @@ planning:
   release_cooldown_days: 7        # ignore artifact versions younger than this
   max_builds: 60
   max_wall_minutes: 120
-  objective_profile: cve_first    # see spec section 8.5
+  objective_profile: conservative_patch  # or latest_first; see spec section 8.5
