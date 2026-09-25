@@ -25,10 +25,10 @@ These are enforced by code and tests, not just convention:
 
 ## Current status
 
-- Milestone: **M3 (Gate assessment) complete, awaiting review** (2026-09-24). `giml assess`, the survey script and per-project JDK choice are done; the survey ran on redkite, arete and grip (all below Tier B; grip closest at line 86.7%, strength 78.6%); Q7 and Q8 answered. Next: M4, build runner, cache and outcome logging.
+- Milestone: **M4 (build runner, cache, outcome logging) complete, awaiting review** (2026-09-25). Run isolation, failure classes and signatures, the stage cache, structured enforcer violations, baseline verification (including the rewound baseline) and outcome logging with JSONL export are done; M5a (the no-build analysis, `plan --dry-run`) was done before it. Next: the rest of M5, the deterministic planner (joint search and isolation, lossless POM edits in result-branch commits, per-dependency reason lines, deferrals, japicmp filtering, naive-baseline comparison, rewind comparison).
 - M1 accepted 2026-09-24. M2 checkpoint recorded (dff9705). M3 accepted 2026-09-25 (survey: redkite Tier A at 970df7f, grip and arete no tier yet).
-- Self-gate during M3: Tier B PASS (line 99.4%, branch 97.2%, test strength 90.4%, mutation coverage 89.9%, excluded share 2.6%, 0 flaky of 5 runs).
-- Current work (2026-09-25): **M5a, the analysis half of M5 (`giml plan --dry-run`)**, done before M4 (spec §17): resolve, declarations, exposure, candidates, report and the CLI are in and work on real projects. Parent and BOM upgrades are evaluated by resolving each candidate version (spec §8.2). Remaining gaps: enforcer violations with their offending artifacts (M4 baseline), `--rewind-to` with `--dry-run`, general updates of parents. M3 accepted 2026-09-25. redkite earned Tier A at `970df7f` (line 97.1, branch 91.5, strength 92.8, mutation 91.3).
+- Self-gate at M4: Tier B PASS (line 99.25%, branch 96.79%, test strength 90.04%, mutation coverage 89.99%, excluded share 1.96%, 0 flaky of 5 runs). 1,105 fast tests and 7 slow tests (real Maven and JVM) pass.
+- M4 evidence on real projects (2026-09-25, scratch clones): `giml plan` verified the baseline of redkite and grip (build, unit tests and enforcer pass) and of arete (build and unit tests pass; the enforcer fails with 9 convergence violations that become the reference set); a repeat on arete took 0.33 s instead of 22.6 s, all three stages cache hits. Open gaps: `--rewind-to` with `--dry-run`, parent updates as general updates, the stages integration test and startup check (M6), `knowledge_transition` and `deferral` (M5).
 - Update this line and the log below at each checkpoint.
 
 ## Build and test commands
