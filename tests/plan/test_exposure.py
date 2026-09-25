@@ -120,3 +120,22 @@ def test_real_redkite_trees():
     assert "com.redkite:red-kite-core" not in {str(d.coordinate) for d in result.dependencies}  # a sibling module
     ognl = next(d for d in result.dependencies if str(d.coordinate) == "ognl:ognl")
     assert (ognl.direct, ognl.modules) == (False, (server.coordinate,))
+
+
+def tree_exposure(*findings):
+    from giml.plan.exposure import ResolvedDependency, TreeExposure
+
+    deps = tuple(ResolvedDependency(f.coordinate, f.version, (), (), True, (f,)) for f in findings)
+    return TreeExposure(deps, exposure_of(findings), "osv-fake")
+
+
+def test_a_candidate_is_worse_only_when_the_exposure_ordering_says_so():
+    from giml.plan.exposure import worse_exposure
+
+    base = tree_exposure(finding("A", "o:l", "1", SeverityRating.HIGH))
+    assert worse_exposure(base, base) == ()
+    assert worse_exposure(base, tree_exposure()) == ()  # a fix
+    assert worse_exposure(base, tree_exposure(finding("B", "o:m", "1", SeverityRating.LOW))) == ()  # a swap for a lesser one
+    more = worse_exposure(base, tree_exposure(finding("A", "o:l", "1"), finding("B", "o:m", "1")))
+    assert more == ("exposure rose from HIGH x1 (1 in all) to HIGH x2 (2 in all)", "new advisory B")
+    assert worse_exposure(tree_exposure(), tree_exposure(finding("C", "o:l", "1", SeverityRating.LOW)))[0].startswith("exposure rose from none")

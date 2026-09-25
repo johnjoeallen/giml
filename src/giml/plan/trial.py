@@ -14,18 +14,22 @@ that adds a violation is stopped before minutes of tests are spent on it.
 from __future__ import annotations
 
 import hashlib
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from collections.abc import Callable, Sequence
 
 from giml.core.interfaces import BuildRunner
 from giml.git.runner import Git
 from giml.git.worktrees import WorktreeManager
 from giml.maven.build import StageOutcome
 from giml.maven.enforcer import Violation, new_violations, resolved_violations
-from giml.maven.failures import DUPLICATE_CLASSES, ENFORCER_CONVERGENCE, Failure
+from giml.maven.failures import DUPLICATE_CLASSES, ENFORCER_CONVERGENCE, RESOLUTION, VULNERABILITY_WORSE, Failure
 from giml.maven.pom_change import Change, apply_changes, rebase
+from giml.maven.tree import ResolutionError
 from giml.plan.baseline import Baseline
+from giml.plan.exposure import TreeExposure, worse_exposure
 
 TRIAL_ORDER = ("compile", "enforcer", "unit_test")
 _CONVERGENCE_RULES = frozenset({"DependencyConvergence", "BanDuplicatePomDependencyVersions"})
@@ -65,12 +69,22 @@ def _enforcer_failure(outcome: StageOutcome, new: tuple[Violation, ...]) -> Fail
     return Failure(failure_class, digest[:16], lines)
 
 
+ResolveExposure = Callable[[Path], TreeExposure]  # a project directory to the CVE exposure of its resolved trees
+
+
+def _digest(failure_class: str, lines: Sequence[str]) -> Failure:
+    return Failure(failure_class, hashlib.sha256("\n".join((failure_class, *lines)).encode("utf-8")).hexdigest()[:16], tuple(lines))
+
+
 class TrialRunner:
     def __init__(self, manager: WorktreeManager, result_worktree: Path, project_subdir: str, runner: BuildRunner,
-                 baseline: Baseline, timeout_seconds: int, retries: int = 1) -> None:  # fmt: skip
+                 baseline: Baseline, timeout_seconds: int, retries: int = 1,
+                 resolve_exposure: ResolveExposure | None = None) -> None:  # fmt: skip
         self.manager, self.result_worktree, self.subdir = manager, result_worktree, project_subdir
         self.runner, self.baseline, self.timeout, self.retries = runner, baseline, timeout_seconds, retries
         self._trials = 0
+        self.resolve_exposure = resolve_exposure
+        self.exposure_reference: TreeExposure | None = None  # the tip's exposure: a candidate may not be worse than this
         self.reference = baseline.reference_violations  # what a candidate may keep; shrinks as commits resolve violations
 
     def _stages(self) -> list[str]:
@@ -104,9 +118,26 @@ class TrialRunner:
         finally:
             self.manager.remove(trial)
 
+    def _exposure_stage(self, project: Path) -> StageOutcome | None:
+        """A candidate that makes the vulnerabilities worse fails like a broken build, without one being run."""
+        if self.resolve_exposure is None or self.exposure_reference is None:
+            return None
+        started = time.monotonic()
+        try:
+            lines, failure_class = worse_exposure(self.exposure_reference, self.resolve_exposure(project)), VULNERABILITY_WORSE
+        except ResolutionError as exc:
+            lines, failure_class = (str(exc).replace(str(project), "<project>"),), RESOLUTION
+        failure = _digest(failure_class, lines) if lines else None
+        return StageOutcome("exposure", failure is None, time.monotonic() - started, Path(os.devnull), failure)
+
     def _stages_in(self, project: Path) -> TrialResult:
         outcomes: list[StageOutcome] = []
         resolved: tuple[Violation, ...] = ()
+        early = self._exposure_stage(project)
+        if early is not None:
+            outcomes.append(early)
+            if not early.passed:
+                return TrialResult(False, False, "exposure", early.failure, tuple(outcomes), (), ())
         for stage in self._stages():
             outcome = self._run(project, stage)
             outcomes.append(outcome)

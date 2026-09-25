@@ -21,6 +21,7 @@ UNIT_TEST = "unit_test"
 INTEGRATION_TEST = "integration_test"
 TIMEOUT = "timeout"
 INFRASTRUCTURE = "infrastructure"  # not the candidate's fault: retry or ignore
+VULNERABILITY_WORSE = "vulnerability_worse"  # judged from the resolved tree and the advisory snapshot, without a build
 UNKNOWN = "unknown"
 
 MAX_KEY_LINES = 8

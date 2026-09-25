@@ -85,7 +85,7 @@ def verdict_of(result: TrialResult, required: frozenset[str] = frozenset()) -> V
     else:
         detail = f": {result.failure.key_lines[0]}" if result.failure.key_lines else ""
         reason = f"{result.failed_stage} {result.failure.failure_class}{detail}"
-    cost = 0 if result.outcomes and result.cache_hits == len(result.outcomes) else 1
+    cost = 0 if result.failed_stage == "exposure" or (result.outcomes and result.cache_hits == len(result.outcomes)) else 1
     return Verdict(result.passed, result.inconclusive, reason, cost)
 
 
@@ -135,6 +135,7 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
     left: list[Left] = []
     builds, stop, detail = 0, "complete", ""
     before = analysis.exposure.exposure
+    trial.exposure_reference = analysis.exposure
     held: dict[str, str] = {}
 
     naive: list[Naive | None] = []
@@ -163,9 +164,11 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
 
     if phase(unit_proposals(analysis)):
         analysis = reanalyse("02-tree.log", True)
+        trial.exposure_reference = analysis.exposure
     if stop != "inconclusive":
         if phase(_dependency_phase(analysis, options, root_pom, trial.reference, clock()), "dependency"):
             analysis = reanalyse("03-tree.log", False)
+            trial.exposure_reference = analysis.exposure
     return PlanOutcome(tuple(committed), tuple(left), builds, stop, detail, before, analysis.exposure.exposure, held, next(iter(naive), None))
 
 

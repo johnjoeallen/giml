@@ -9,6 +9,7 @@ state has no violation (spec 8.5), and an untouched branch cannot claim that.
 from __future__ import annotations
 
 import datetime
+import itertools
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -19,8 +20,10 @@ from giml.data import central, osv
 from giml.git.worktrees import WorktreeManager
 from giml.maven.enforcer import Violation
 from giml.maven.project import discover_reactor
+from giml.maven.tree import resolve_reactor
 from giml.plan.analysis import Analysis, MissingSnapshotError, Sources, analyse, newest_release, tier_status
 from giml.plan.baseline_run import MAVEN_TIMEOUT_SECONDS, BaselineRun
+from giml.plan.exposure import TreeExposure, resolve_exposure
 from giml.plan.execute import PlanOutcome, deferral_records, execute
 from giml.plan.report import ReportInputs, build_report, render_markdown
 from giml.plan.trial import TrialRunner
@@ -72,11 +75,24 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
         return analyse(project_dir, poms, logs, MAVEN_TIMEOUT_SECONDS, maven, baseline_run.env, sources, osv_snapshot,
                        central_snapshot, options, tier, clock(), log_name, units)  # fmt: skip
 
+    trial_count = itertools.count(1)
+
+    def trial_exposure(trial_project: Path) -> TreeExposure:
+        """The CVE exposure of a trial worktree's resolved trees: a tree resolution, no build."""
+        trees = resolve_reactor(trial_project, list(discover_reactor(trial_project)), logs / f"trial-{next(trial_count):03d}-tree.log",
+                                MAVEN_TIMEOUT_SECONDS, maven, baseline_run.env)  # fmt: skip
+        advisories = sources.advisories(osv_snapshot)
+        try:
+            return resolve_exposure(trees, advisories)
+        finally:
+            if hasattr(advisories, "close"):
+                advisories.close()
+
     first = reanalyse("01-tree.log", tier.usable)
     outcome = None
     if tier.usable:
         trial = TrialRunner(WorktreeManager(ws.repo, state_dir, ws.run_id), ws.worktree, ws.repo.subdir or "", baseline_run.runner,
-                            baseline_run.baseline, MAVEN_TIMEOUT_SECONDS)  # fmt: skip
+                            baseline_run.baseline, MAVEN_TIMEOUT_SECONDS, resolve_exposure=trial_exposure)  # fmt: skip
         outcome = execute(ws.worktree, ws.run_id, tier.earned or "", first, reanalyse, trial, options, clock, project_dir / "pom.xml")
         for record in deferral_records(outcome, ws.repo.project_key, ws.run_id, clock()):
             store.save_deferral(record)

@@ -271,3 +271,43 @@ def test_the_reference_is_kept_when_the_enforcer_is_not_an_oracle(world):
                                         enforcer=failed("enforcer", "resolution")), world[2], 60)  # fmt: skip
     stages = Stages()
     assert runner(world, stages, unusable).refresh_reference() == () and stages.stages == []
+
+
+def exposure_of_tree(*findings):
+    from tests.plan.test_exposure import tree_exposure
+
+    return tree_exposure(*findings)
+
+
+def test_a_candidate_that_makes_the_vulnerabilities_worse_fails_without_a_build(world):
+    from tests.plan.test_exposure import finding
+
+    stages = Stages()
+    trial_runner = runner(world, stages)
+    trial_runner.resolve_exposure = lambda project: exposure_of_tree(finding("A", "o:l", "1"))
+    trial_runner.exposure_reference = exposure_of_tree()
+    outcome = trial_runner.verify([bump(world[2])])
+    assert (outcome.passed, outcome.failed_stage, outcome.failure.failure_class) == (False, "exposure", "vulnerability_worse")
+    assert stages.calls == [] and outcome.failure.key_lines[-1] == "new advisory A"
+
+
+def test_a_candidate_that_is_not_worse_goes_on_to_the_builds(world):
+    stages = Stages()
+    trial_runner = runner(world, stages)
+    trial_runner.resolve_exposure = lambda project: exposure_of_tree()
+    trial_runner.exposure_reference = exposure_of_tree()
+    outcome = trial_runner.verify([bump(world[2])])
+    assert outcome.passed and stages.stages == ["compile", "enforcer", "unit_test"] and outcome.outcomes[0].stage == "exposure"
+
+
+def test_a_tree_that_cannot_be_resolved_fails_as_resolution(world):
+    from giml.maven.tree import ResolutionError
+
+    def broken(project):
+        raise ResolutionError(f"Maven could not resolve {project}: see the log")
+
+    trial_runner = runner(world, Stages())
+    trial_runner.resolve_exposure, trial_runner.exposure_reference = broken, exposure_of_tree()
+    outcome = trial_runner.verify([bump(world[2])])
+    assert (outcome.failed_stage, outcome.failure.failure_class) == ("exposure", "resolution")
+    assert "<project>" in outcome.failure.key_lines[0]

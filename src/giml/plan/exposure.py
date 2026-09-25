@@ -96,3 +96,24 @@ def resolve_exposure(trees: Sequence[ModuleTree], advisories: AdvisorySource) ->
 
 def _order(coordinate: Coordinate, version: str) -> tuple:
     return (str(coordinate), ComparableVersion(version), version)
+
+
+def worse_exposure(reference: TreeExposure, candidate: TreeExposure) -> tuple[str, ...]:
+    """Lines saying why ``candidate`` is worse than ``reference`` (spec 8.5, criterion 1); empty when it is not.
+
+    Worse is the exposure ordering itself, so trading a critical advisory for a low one is an improvement and
+    a new advisory of the same or lower severity next to a fix is not, but any rise in the worst severity,
+    in how many have it, or in the total is.
+    """
+    if candidate.exposure.key <= reference.exposure.key:
+        return ()
+    known = {f.advisory_id for d in reference.dependencies for f in d.findings}
+    new = sorted({f.advisory_id for d in candidate.dependencies for f in d.findings} - known)
+    return (f"exposure rose from {_describe(reference.exposure)} to {_describe(candidate.exposure)}",
+            *(f"new advisory {advisory}" for advisory in new))  # fmt: skip
+
+
+def _describe(exposure: Exposure) -> str:
+    if exposure.max_severity is None:
+        return "none"
+    return f"{exposure.max_severity.name} x{exposure.at_max} ({exposure.total} in all)"

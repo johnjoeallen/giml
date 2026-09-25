@@ -191,3 +191,11 @@ def test_a_baseline_convergence_conflict_is_aligned_and_committed_when_it_resolv
     outcome = run(repo, world, trial)
     assert any(c.kind == "enforcer_pin" and "o:clean" in c.label for c in outcome.committed)
     assert "<version>1.0.1</version>" in (repo / "pom.xml").read_text()
+
+
+def test_a_vulnerability_failure_costs_no_build_and_is_named():
+    failure = Failure("vulnerability_worse", "abc", ("exposure rose from none to LOW x1 (1 in all)", "new advisory A"))
+    outcome = StageOutcome("exposure", False, 0.4, Path("/dev/null"), failure)
+    verdict = verdict_of(TrialResult(False, False, "exposure", failure, (outcome,), (), ()))
+    assert (verdict.passed, verdict.cost) == (False, 0)
+    assert verdict.reason == "exposure vulnerability_worse: exposure rose from none to LOW x1 (1 in all)"
