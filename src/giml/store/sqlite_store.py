@@ -14,7 +14,7 @@ from importlib import resources
 from pathlib import Path
 
 from giml.core.model import (
-    BuildAttemptRecord, CandidateStateRecord, DeferralRecord, ExampleRecord, GateResultRecord, ProjectRecord, RunRecord, SnapshotInfo,
+    BuildAttemptRecord, CandidateStateRecord, DeferralRecord, TransitionRecord, ExampleRecord, GateResultRecord, ProjectRecord, RunRecord, SnapshotInfo,
 )  # fmt: skip
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
@@ -259,6 +259,28 @@ class SqliteStateStore:
         ).rowcount
         if updated != 1:
             raise StoreError(f"deferral {deferral_id} is unknown or already resolved")
+
+    def record_transition(self, coordinate: str, from_version: str, to_version: str, failure_class: str, signature: str,
+                          seen_at: datetime.datetime) -> int:
+        """Count one more failure of this transition; returns how many times it had failed before."""
+        transition_id = "|".join((coordinate, from_version, to_version, failure_class, signature))
+        row = self._conn.execute("SELECT count FROM knowledge_transition WHERE id = ?", (transition_id,)).fetchone()  # pragma: no mutate
+        before = row[0] if row else 0
+        self._conn.execute(
+            "INSERT INTO knowledge_transition (id, coordinate, from_version, to_version, failure_class, error_signature, "  # pragma: no mutate
+            "count, last_seen) VALUES (?, ?, ?, ?, ?, ?, 1, ?) "  # pragma: no mutate
+            "ON CONFLICT (id) DO UPDATE SET count = count + 1, last_seen = excluded.last_seen",  # pragma: no mutate
+            (transition_id, coordinate, from_version, to_version, failure_class, signature, _utc_text(seen_at)),
+        )
+        return before
+
+    def list_transitions(self, coordinate: str | None = None) -> list[TransitionRecord]:
+        rows = self._conn.execute(
+            "SELECT id, coordinate, from_version, to_version, failure_class, error_signature, count, last_seen "  # pragma: no mutate
+            "FROM knowledge_transition WHERE (? IS NULL OR coordinate = ?) ORDER BY id",  # pragma: no mutate
+            (coordinate, coordinate),
+        ).fetchall()
+        return [TransitionRecord(*row[:7], _parse_time(row[7])) for row in rows]
 
 
 def _gate_result_from_row(row: tuple) -> GateResultRecord:

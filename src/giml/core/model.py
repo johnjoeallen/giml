@@ -171,6 +171,20 @@ class DeferralRecord:
 
 
 @dataclass(frozen=True)
+class TransitionRecord:
+    """A dependency transition that failed verification, and how often it has (spec 10 and 11)."""
+
+    id: str
+    coordinate: str
+    from_version: str
+    to_version: str
+    failure_class: str
+    error_signature: str
+    count: int
+    last_seen: datetime.datetime
+
+
+@dataclass(frozen=True)
 class ExampleRecord:
     """A labelled training example (spec 15). ``dedup_hash`` drops exact repeats."""
 

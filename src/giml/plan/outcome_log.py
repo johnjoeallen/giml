@@ -86,3 +86,40 @@ def log_baseline(
             f"{run_id}:{stage.stage}", run_id, canonical_json(_features(stage, tier, oracle, rewind, jdk)),
             canonical_json({"stage": stage.stage, "outcome": label, "failure_class": outcome.failure_class}), project_id, dedup))  # fmt: skip
     return LoggedBaseline(state_id, attempts, new_examples)
+
+
+def log_trial(store: StateStore, run_id: str, project_id: str, number: int, changes: list[dict[str, Any]], result,
+              *, tier: str | None, oracle: dict[str, float] | None, jdk: str | None, now) -> list[dict[str, Any]]:  # fmt: skip
+    """Log one candidate trial like the baseline (state, attempt and example per stage that ran) and remember a failure.
+
+    ``changes`` describe what the trial applied (key, members, kind, from, to). A failed single-step trial adds to
+    the knowledge of failed transitions; the returned entries say how many times each had failed before. A
+    trial with several steps cannot say which one broke it, so it only teaches the examples.
+    """
+    state_id = f"{run_id}:trial-{number:03d}"
+    status = "inconclusive" if result.inconclusive else "passed" if result.passed else "failed"
+    store.save_state(CandidateStateRecord(state_id, run_id, f"{run_id}:baseline", canonical_json(changes), status))
+    for outcome in result.outcomes:
+        if outcome.retryable:
+            continue  # the environment failed; it says nothing about the candidate
+        label = "pass" if outcome.passed else "fail"
+        store.save_attempt(BuildAttemptRecord(f"{state_id}:{outcome.stage}:1", state_id, outcome.stage, label, outcome.failure_class,
+                                              outcome.signature, outcome.cache_key, outcome.cache_hit,
+                                              round(outcome.duration_seconds * 1000), str(outcome.log_path)))  # fmt: skip
+        features = {"kind": "candidate", "stage": outcome.stage, "changes": changes, "failure_class": outcome.failure_class,
+                    "signature": outcome.signature, "key_lines": list(outcome.failure.key_lines) if outcome.failure else [],
+                    "duration_seconds": outcome.duration_seconds, "cache_hit": outcome.cache_hit, "tier": tier, "oracle": oracle,
+                    "jdk": jdk, "new_violations": [v.identity for v in result.new_violations]}  # fmt: skip
+        dedup = hashlib.sha256(canonical_json({"scope": "candidate", "project": project_id, "stage": outcome.stage, "outcome": label,
+                                               "signature": outcome.signature, "changes": changes}).encode()).hexdigest()  # fmt: skip
+        store.save_example(ExampleRecord(f"{state_id}:{outcome.stage}", run_id, canonical_json(features),
+                                         canonical_json({"stage": outcome.stage, "outcome": label, "failure_class": outcome.failure_class}),
+                                         project_id, dedup))  # fmt: skip
+    if result.passed or result.inconclusive or result.failure is None or len(changes) != 1 or changes[0]["from"] is None:
+        return []
+    change = changes[0]
+    return [{"coordinate": member, "from": change["from"], "to": change["to"], "failure_class": result.failure.failure_class,
+             "signature": result.failure.signature,
+             "prior_failures": store.record_transition(member, change["from"], change["to"], result.failure.failure_class,
+                                                       result.failure.signature, now)}
+            for member in change["members"]]  # fmt: skip

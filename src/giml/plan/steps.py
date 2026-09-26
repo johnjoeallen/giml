@@ -34,6 +34,7 @@ class Move:
 
     changes: tuple[Change, ...]
     clears: tuple[str, ...]
+    transition: tuple[str, str] | None = None  # (from, to) version, for the knowledge of failed transitions
 
 
 @dataclass(frozen=True)
@@ -135,7 +136,7 @@ def _group_proposal(members: list[DependencyPlan], sites: tuple[Site, ...], anal
             changes: tuple[Change, ...] = tuple(SetVersion(site, site_text(site), version) for site in sites)
         else:
             changes = tuple(AddPin(root_pom, m.coordinate, version, f"{_labels(findings)}; re-evaluate on a new release") for m in members[:1])
-        moves.append(Move(changes, advisories))
+        moves.append(Move(changes, advisories, (current, version)))
     rating = max((_severity(m, analysis) for m in members), default=0)
     ladder = Ladder(key, tuple(steps), -rating, note, highest=newest is not None)  # the order is fixed up by the caller, worst first
     return Proposal(ladder, tuple(moves), tuple(str(m.coordinate) for m in members), "dependency", blocked)
@@ -178,7 +179,8 @@ def _general_proposal(members: list[DependencyPlan], sites: tuple[Site, ...],
         key = f"upd:{'+'.join(str(m.coordinate) for m in members)}@{members[0].version}"
         steps = tuple(Step(key, f"{_short(members)} {members[0].version} → {version} ({kind})", kind, rank)
                       for rank, (kind, version) in enumerate(newest))  # fmt: skip
-        moves = tuple(Move(tuple(SetVersion(site, site_text(site), version) for site in sites), ()) for _, version in newest)
+        moves = tuple(Move(tuple(SetVersion(site, site_text(site), version) for site in sites), (), (members[0].version, version))
+                      for _, version in newest)
         return Proposal(Ladder(key, steps, 0, highest=True), moves, tuple(str(m.coordinate) for m in members), "dependency")
     usable = [next((c for c in m.candidates if c.blocked is None and c.kinds[0] in (NEXT_PATCH, NEXT_MINOR)), None) for m in members]
     if any(c is None for c in usable) or len({(c.version, c.kinds[0]) for c in usable}) != 1:
@@ -187,7 +189,7 @@ def _general_proposal(members: list[DependencyPlan], sites: tuple[Site, ...],
     key = f"upd:{'+'.join(str(m.coordinate) for m in members)}@{members[0].version}"
     label = f"{_short(members)} {members[0].version} → {version} ({kind})"
     changes = tuple(SetVersion(site, site_text(site), version) for site in sites)
-    return Proposal(Ladder(key, (Step(key, label, kind, 0),), 0), (Move(changes, ()),), tuple(str(m.coordinate) for m in members), "dependency")
+    return Proposal(Ladder(key, (Step(key, label, kind, 0),), 0), (Move(changes, (), (members[0].version, version)),), tuple(str(m.coordinate) for m in members), "dependency")
 
 
 def dependency_proposals(analysis: Analysis, options, root_pom: Path, now: datetime.datetime | None = None) -> list[Proposal]:
@@ -238,7 +240,7 @@ def unit_proposals(analysis: Analysis) -> list[Proposal]:
         steps, moves = [], []
         for rank, (kind, evaluation) in enumerate([(floor.kind, floor_eval), *((f"{unit.kind}_{e.level}", e) for e in others)]):
             steps.append(Step(key, f"{unit.kind} {unit.coordinate} {unit.version} → {evaluation.version} ({kind})", kind, rank))
-            moves.append(Move((SetVersion(unit.site, site_text(unit.site), evaluation.version),), evaluation.cleared))
+            moves.append(Move((SetVersion(unit.site, site_text(unit.site), evaluation.version),), evaluation.cleared, (unit.version, evaluation.version)))
         proposals.append(Proposal(Ladder(key, tuple(steps), len(proposals)), tuple(moves), (str(unit.coordinate),), "unit"))
     return proposals
 
@@ -262,6 +264,6 @@ def enforcer_proposals(violations, analysis: Analysis, root_pom: Path) -> list[P
             or (AddPin(root_pom, coordinate, target, f"aligns {violation.identity}; re-evaluate on a new release"),)  # fmt: skip
         key = f"enf:{violation.subject}"
         label = f"{violation.subject} → {target} (aligns dependency convergence)"
-        proposals.append(Proposal(Ladder(key, (Step(key, label, "enforcer_pin", 0),), 0), (Move(changes, ()),),
+        proposals.append(Proposal(Ladder(key, (Step(key, label, "enforcer_pin", 0),), 0), (Move(changes, (), (min(versions, key=ComparableVersion), target)),),
                                   (violation.subject,), "enforcer", resolves=(violation.identity,)))  # fmt: skip
     return proposals

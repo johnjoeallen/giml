@@ -26,6 +26,7 @@ from giml.plan.search import Budget, Outcome, Step, Verdict, search
 from giml.plan.steps import Proposal, dependency_proposals, enforcer_proposals, unit_proposals
 from giml.plan.trial import TrialResult, TrialRunner
 
+Recorder = Callable[[list[dict], TrialResult], None]  # what a trial applied, and how it went (outcome logging, knowledge)
 Reanalyse = Callable[[str, bool], Analysis]  # (log name, evaluate parent/BOM units) -> the worktree's current analysis
 _TRIGGERS = ("new_release", "new_advisory", "pom_change")
 
@@ -128,8 +129,19 @@ def _lefts(outcome: Outcome, proposals: Mapping[str, Proposal]) -> list[Left]:
     return [Left(key, proposals[key].members, deferral.reason, deferral.tried) for key, deferral in outcome.deferred.items()]
 
 
+def _applied(proposals: Mapping[str, Proposal], chosen: Mapping[str, Step]) -> list[dict]:
+    """A description of a trial's steps for the log: the ladder, its coordinates, the kind and the version move."""
+    described = []
+    for key, step in chosen.items():
+        move = proposals[key].moves[step.rank]
+        described.append({"key": key, "members": list(proposals[key].members), "kind": step.kind,
+                          "from": move.transition[0] if move.transition else None,
+                          "to": move.transition[1] if move.transition else None})  # fmt: skip
+    return described
+
+
 def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: Reanalyse, trial: TrialRunner,
-            options, clock: Callable[[], datetime.datetime], root_pom: Path) -> PlanOutcome:  # fmt: skip
+            options, clock: Callable[[], datetime.datetime], root_pom: Path, recorder: Recorder | None = None) -> PlanOutcome:  # fmt: skip
     """Search and commit the parent/BOM phase, then the dependency phase; ``root`` is the result worktree."""
     started = clock()
     committed: list[Committed] = []
@@ -150,7 +162,10 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
         def verifier(pit: bool) -> Callable[[Mapping[str, Step]], Verdict]:
             def verify(chosen: Mapping[str, Step]) -> Verdict:
                 required = frozenset(i for key in chosen for i in by_key[key].resolves)
-                return verdict_of(trial.verify(_changes_of(by_key, chosen), pit=pit), required)
+                trial_result = trial.verify(_changes_of(by_key, chosen), pit=pit)
+                if recorder is not None:
+                    recorder(_applied(by_key, chosen), trial_result)
+                return verdict_of(trial_result, required)
 
             return verify
 

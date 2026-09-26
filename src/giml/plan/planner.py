@@ -28,6 +28,7 @@ from giml.plan.baseline_run import MAVEN_TIMEOUT_SECONDS, BaselineRun
 from giml.plan.exposure import TreeExposure, resolve_exposure
 from giml.plan.execute import PlanOutcome, deferral_records, execute
 from giml.plan.rewind_report import compare_states, render_comparison
+from giml.plan.outcome_log import log_trial, oracle_strength
 from giml.plan.report import ReportInputs, build_report, render_markdown
 from giml.plan.trial import TrialRunner
 from giml.maven.runner import MavenRunner
@@ -102,12 +103,20 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
                 advisories.close()
 
     first = reanalyse("01-tree.log", tier.usable)
-    outcome = None
+    outcome, knowledge = None, []
     if tier.usable:
         trial = TrialRunner(WorktreeManager(ws.repo, state_dir, ws.run_id), ws.worktree, ws.repo.subdir or "", baseline_run.runner,
                             baseline_run.baseline, MAVEN_TIMEOUT_SECONDS, resolve_exposure=trial_exposure)  # fmt: skip
         trial.pit_floors = pit_floors(baseline_run.baseline, config.tiers.get(tier.earned or ""))
-        outcome = execute(ws.worktree, ws.run_id, tier.earned or "", first, reanalyse, trial, options, clock, project_dir / "pom.xml")
+        record = store.latest_gate_result(ws.repo.project_key)
+        trial_numbers = itertools.count(1)
+
+        def recorder(applied: list[dict], result) -> None:
+            knowledge.extend(log_trial(store, ws.run_id, ws.repo.project_key, next(trial_numbers), applied, result, tier=tier.earned,
+                                       oracle=oracle_strength(record), jdk=baseline_run.jdk.version, now=clock()))  # fmt: skip
+
+        outcome = execute(ws.worktree, ws.run_id, tier.earned or "", first, reanalyse, trial, options, clock, project_dir / "pom.xml",
+                          recorder)  # fmt: skip
         for record in deferral_records(outcome, ws.repo.project_key, ws.run_id, clock()):
             store.save_deferral(record)
     remaining = _final_violations(baseline_run, project_dir, bool(outcome and outcome.committed))
@@ -120,6 +129,7 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
         parents=first.declarations.parents, skipped=first.declarations.skipped, units=first.unit_plans, warnings=[]))  # fmt: skip
     report["kind"] = "plan"
     report["result"] = result_section(ws, outcome, remaining)
+    report["result"]["failed_transitions"] = knowledge
     if ws.rewind is not None and outcome is not None and outcome.final is not None:
         report["rewind_comparison"] = compare_states(first.exposure, outcome.final, base_exposure(ws, state_dir, trial_exposure))
     directory = state_dir / "reports" / ws.run_id
@@ -175,6 +185,9 @@ def render_plan_summary(report: dict) -> str:
     if naive:
         verdict = "would have passed" if naive["passed"] else f"would have failed ({naive['reason']})"
         lines.append(f"naive baseline (every first step at once, {len(naive['steps'])} change(s)): {verdict}")
+    for failed in result.get("failed_transitions", []):
+        seen = f", failed {failed['prior_failures']} time(s) before" if failed["prior_failures"] else ""
+        lines.append(f"  ! {failed['coordinate']} {failed['from']} -> {failed['to']} failed: {failed['failure_class']}{seen}")
     if result["remaining_violations"]:
         lines.append(f"enforcer: {len(result['remaining_violations'])} violation(s) remain: {', '.join(result['remaining_violations'])}")
     else:

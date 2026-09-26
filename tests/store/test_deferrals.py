@@ -50,3 +50,15 @@ def test_a_deferral_can_be_resolved_once(store):
 def test_a_deferral_needs_its_project(store):
     with pytest.raises(sqlite3.IntegrityError):
         store.save_deferral(deferral(project="unknown"))
+
+
+def test_a_failed_transition_is_counted_across_runs_and_reports_how_often_it_failed_before(store):
+    args = ("o:lib", "1.0.0", "1.1.0", "compile", "abc")
+    assert store.record_transition(*args, T0) == 0
+    later = T0 + datetime.timedelta(days=3)
+    assert store.record_transition(*args, later) == 1
+    other = store.record_transition("o:lib", "1.0.0", "1.1.0", "unit_test", "def", T0)
+    assert other == 0
+    (compile_failure,) = [t for t in store.list_transitions("o:lib") if t.failure_class == "compile"]
+    assert (compile_failure.count, compile_failure.last_seen) == (2, later)
+    assert len(store.list_transitions()) == 2 and store.list_transitions("o:other") == []

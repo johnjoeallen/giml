@@ -225,3 +225,13 @@ def test_a_step_that_only_pit_rejects_is_backed_off_or_deferred(repo, world):
     outcome = run(repo, world, PitAware(pit_poison={"1.0.2"}))
     lib = next(c for c in outcome.committed if "o:lib" in c.label)
     assert lib.kind == "cve_minor" and "<version>1.1.0</version>" in (repo / "pom.xml").read_text()
+
+
+def test_every_trial_is_reported_to_the_recorder_with_what_it_applied(repo, world):
+    seen = []
+    first = analysis(world)
+    execute(repo, "run-1", "B", first, lambda name, units: first, FakeTrial(poison={"1.0.2"}), options(), clock, repo / "pom.xml",
+            lambda applied, trial_result: seen.append((applied, trial_result.passed)))  # fmt: skip
+    lib = [entry for entry, _ in seen if len(entry) == 1 and entry[0]["key"] == "dep:o:lib@1.0.0"]
+    assert {(e[0]["from"], e[0]["to"]) for e in lib} == {("1.0.0", "1.0.2"), ("1.0.0", "1.1.0")}
+    assert any(passed is False for _, passed in seen) and lib[0][0]["members"] == ["o:lib"]
