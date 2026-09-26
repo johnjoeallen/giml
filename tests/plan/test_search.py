@@ -295,3 +295,37 @@ def test_repromotion_stops_with_the_budget():
     fake = Fake(interactions=[{("a", 0), ("b", 0)}])
     outcome = run([ladder("a", "cve_patch", order=0), ladder("b", "cve_patch", order=1)], fake, budget=budget(builds=3))
     assert outcome.builds <= 3
+
+
+def with_fallback(key, kept, hinted, order=0, highest=False):
+    """A ladder whose steps ``hinted`` (ranks) are expected to fail and are only built when the others do not pass."""
+    steps = [Step(key, f"{key} step{rank}", "cve_patch", rank, hint="uses removed API" if rank in hinted else "") for rank in range(kept + len(hinted))]
+    return Ladder(key, tuple(s for s in steps if not s.hint), order, fallback=tuple(s for s in steps if s.hint), highest=highest)
+
+
+def test_a_hinted_step_is_never_built_when_a_kept_step_passes():
+    fake = Fake()
+    outcome = run([with_fallback("a", 2, {1})], fake)
+    assert outcome.accepted["a"].rank == 0 and all(("a", 1) not in call for call in fake.calls)
+
+
+def test_hinted_steps_are_built_anyway_when_nothing_else_passes():
+    fake = Fake(bad={("a", 0), ("a", 2)})
+    outcome = run([with_fallback("a", 2, {1})], fake)
+    assert outcome.accepted["a"].rank == 1 and outcome.deferred == {}  # the hint was wrong: step 1 builds fine
+
+
+def test_a_ladder_with_only_hinted_steps_still_gets_them_built():
+    outcome = run([with_fallback("a", 0, {0, 1})], Fake(bad={("a", 0)}))
+    assert outcome.accepted["a"].rank == 1
+
+
+def test_when_hinted_steps_fail_too_the_ladder_is_deferred_with_every_reason():
+    outcome = run([with_fallback("a", 1, {1})], Fake(bad={("a", 0), ("a", 1)}))
+    assert "a" in outcome.deferred and [rank for rank, _ in outcome.deferred["a"].tried] == [0, 1]
+
+
+def test_a_highest_ladder_bisects_the_kept_steps_and_backs_off_by_rank_after_a_combination_clash():
+    fake = Fake(interactions=[{("a", 3), ("c", 0)}])
+    outcome = run([with_fallback("a", 3, {1}, order=1, highest=True), ladder("c", "cve_patch", order=0)], fake)
+    assert outcome.accepted["a"].rank in (0, 2) and outcome.accepted["c"].rank == 0

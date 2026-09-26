@@ -267,3 +267,24 @@ def enforcer_proposals(violations, analysis: Analysis, root_pom: Path) -> list[P
         proposals.append(Proposal(Ladder(key, (Step(key, label, "enforcer_pin", 0),), 0), (Move(changes, (), (min(versions, key=ComparableVersion), target)),),
                                   (violation.subject,), "enforcer", resolves=(violation.identity,)))  # fmt: skip
     return proposals
+
+
+def hint_api_breaks(proposals: list[Proposal], checker) -> list[Proposal]:
+    """Move the steps of single-dependency ladders that break an API the project uses to the ladder's fallback.
+
+    A hinted step is expected to fail its build, so it is tried only when nothing else in the ladder passes
+    (``plan.api_diff``). Ladders over several coordinates and parent/BOM units are left alone.
+    """
+    hinted = []
+    for proposal in proposals:
+        if proposal.kind != "dependency" or len(proposal.members) != 1:
+            hinted.append(proposal)
+            continue
+        kept, fallback = [], []
+        for step in proposal.ladder.steps:
+            transition = proposal.moves[step.rank].transition
+            breaks = checker.check(proposal.members[0], *transition) if transition else ()
+            (fallback if breaks else kept).append(dataclasses.replace(step, hint="; ".join(breaks[:3])) if breaks else step)
+        hinted.append(dataclasses.replace(proposal, ladder=dataclasses.replace(proposal.ladder, steps=tuple(kept),
+                                                                                fallback=(*proposal.ladder.fallback, *fallback))))
+    return hinted

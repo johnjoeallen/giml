@@ -210,14 +210,27 @@ def report(state: Path) -> dict:
     return json.loads(path.read_text())
 
 
-def test_latest_chops_back_past_versions_that_break_the_build(scenario, capsys):
+def test_latest_does_not_build_versions_whose_api_break_the_project_uses(scenario, capsys):
     assert plan(scenario, "--strategy", "latest") == ExitCode.SUCCESS
     result = report(scenario[1])["result"]
     assert [c["label"] for c in result["committed"]] == ["fx:lib 1.0.0 → 1.0.2 (latest_in_major)"]
+    assert result["failed_transitions"] == [] and result["builds"] == 1  # japicmp saw Lib.hello() removed in 1.1.0 and 1.2.0
+    assert {h["step"].split(" → ")[1].split(" ")[0] for h in result["api_hints"]} == {"1.1.0", "1.2.0"}
+    assert all("fx.Lib.hello (METHOD_REMOVED)" in h["breaks"] for h in result["api_hints"])
+    assert result["exposure_after"]["max_severity"] is None and result["enforcer_clean"]
+    assert "built last: fx:lib 1.0.0 → 1.2.0" in capsys.readouterr().out
+
+
+def test_latest_chops_back_past_versions_that_break_the_build_when_japicmp_has_no_evidence(scenario, capsys):
+    (scenario[0] / "src" / "main" / "java" / "fx" / "App.java").write_text(
+        "package fx;\npublic class App { public String run() { return String.valueOf(Lib.class.getName().length()) + Lib.hello(); } }\n")
+    git(scenario[0], "commit", "-qam", "use Lib differently")
+    scenario[3].java = lambda args, timeout, env=None: subprocess.CompletedProcess(args, 1, "", "no japicmp")  # japicmp fails: no evidence
+    assert plan(scenario, "--strategy", "latest") == ExitCode.SUCCESS
+    result = report(scenario[1])["result"]
+    assert [c["label"] for c in result["committed"]] == ["fx:lib 1.0.0 → 1.0.2 (latest_in_major)"] and result["api_hints"] == []
     failed = {(t["from"], t["to"], t["failure_class"]) for t in result["failed_transitions"]}
     assert failed == {("1.0.0", "1.2.0", "compile"), ("1.0.0", "1.1.0", "compile")}
-    assert result["exposure_after"]["max_severity"] is None and result["enforcer_clean"]
-    assert "failed: compile" in capsys.readouterr().out
     with SqliteStateStore(scenario[1] / "state.db") as store:
         assert {t.to_version for t in store.list_transitions("fx:lib")} == {"1.1.0", "1.2.0"}
 

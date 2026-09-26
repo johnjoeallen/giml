@@ -14,6 +14,7 @@ at the build or time budget, and everything it did not get to is deferred with t
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -26,6 +27,7 @@ class Step:
     label: str  # for people: "org.x:lib 1.0 → 1.0.3 (cve_patch)"
     kind: str  # cve_patch, cve_minor, ...
     rank: int  # position in its ladder; 0 is tried first
+    hint: str = ""  # why it is expected to fail (for example an API break the project uses); such steps are tried last
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class Ladder:
     steps: tuple[Step, ...]  # only steps a build may try; blocked ones are not here
     order: int  # processing order: important fixes first
     note: str = ""  # why there are no steps, when there are none
+    fallback: tuple[Step, ...] = ()  # steps expected to fail: built only if nothing in ``steps`` passed
     highest: bool = False  # steps ascend and the newest that passes is wanted (the `latest` strategy), not the first
 
 
@@ -185,6 +188,26 @@ def _bisect(run: _Run, ladder: Ladder, accepted: dict[str, Step], tried: list[tu
     return low if low >= 0 else None
 
 
+def _attempt(run: _Run, ladder: Ladder, accepted: dict[str, Step], tried: list[tuple[int, str]]) -> Step | None:
+    """The step a ladder takes: the first that passes alone, or the newest that passes in context (``highest``)."""
+    if ladder.highest:
+        found = _bisect(run, ladder, accepted, tried)
+        return ladder.steps[found] if found is not None else None
+    for step in ladder.steps:
+        verdict = run.check({ladder.key: step}, "ladder")
+        if verdict.passed:
+            return step
+        tried.append((step.rank, verdict.reason))
+    return None
+
+
+def _no_step_reason(ladder: Ladder, tried: list[tuple[int, str]]) -> str:
+    if ladder.highest:
+        return f"no version passed, not even the oldest ({ladder.steps[0].label}): {tried[-1][1]}"
+    kinds = "; ".join(f"{s.kind} failed: {reason}" for s, (_, reason) in zip(ladder.steps, tried, strict=False))
+    return f"no fixing version passed ({kinds})"
+
+
 def _fix_ladders(run: _Run, ladders: list[Ladder]) -> tuple[dict[str, Step], dict[str, Deferral], _Stop | None]:
     accepted: dict[str, Step] = {}
     deferred: dict[str, Deferral] = {}
@@ -193,27 +216,21 @@ def _fix_ladders(run: _Run, ladders: list[Ladder]) -> tuple[dict[str, Step], dic
         if stopped is not None:
             deferred[ladder.key] = Deferral(run.budget.untried(stopped.reason, stopped.detail), ())
             continue
-        if not ladder.steps:
+        if not ladder.steps and not ladder.fallback:
             deferred[ladder.key] = Deferral(ladder.note or "no usable step", ())
             continue
         tried: list[tuple[int, str]] = []
         try:
-            if ladder.highest:
-                found = _bisect(run, ladder, accepted, tried)
-                if found is not None:
-                    accepted[ladder.key] = ladder.steps[found]
-                else:
-                    deferred[ladder.key] = Deferral(f"no version passed, not even the oldest ({ladder.steps[0].label}): {tried[-1][1]}", tuple(tried))
-                continue
-            for step in ladder.steps:
-                verdict = run.check({ladder.key: step}, "ladder")
-                if verdict.passed:
-                    accepted[ladder.key] = step
-                    break
-                tried.append((step.rank, verdict.reason))
+            step = _attempt(run, ladder, accepted, tried) if ladder.steps else None
+            if step is None and ladder.fallback:
+                # Steps that were expected to fail (an API break the project uses) are built after all when nothing else passed.
+                fallback = dataclasses.replace(ladder, steps=ladder.fallback, fallback=())
+                step = _attempt(run, fallback, accepted, tried)
+                ladder = ladder if step is not None else fallback
+            if step is not None:
+                accepted[ladder.key] = step
             else:
-                kinds = "; ".join(f"{s.kind} failed: {reason}" for s, (_, reason) in zip(ladder.steps, tried, strict=False))
-                deferred[ladder.key] = Deferral(f"no fixing version passed ({kinds})", tuple(tried))
+                deferred[ladder.key] = Deferral(_no_step_reason(ladder, tried), tuple(tried))
         except _Stop as stop:
             stopped = stop
             reason = f"could not be judged: {stop.detail}" if stop.reason == "inconclusive" else run.budget.untried(stop.reason)
@@ -273,7 +290,7 @@ def _advance(run: _Run, accepted: dict[str, Step], ladders: dict[str, Ladder], c
     """Offer each culprit its next ladder steps in the context of the others; True when the whole set passes."""
     for key in culprits:
         ladder, rank = ladders[key], accepted[key].rank
-        for step in (reversed(ladder.steps[:rank]) if ladder.highest else ladder.steps[rank + 1 :]):
+        for step in ([s for s in reversed(ladder.steps) if s.rank < rank] if ladder.highest else [s for s in ladder.steps if s.rank > rank]):
             candidate = {**accepted, key: step}
             if run.check(candidate, "advance", True).passed:
                 accepted[key] = step

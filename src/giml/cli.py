@@ -236,7 +236,7 @@ def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore
         verified.append(run_baseline(ws, temp, root, config, catalog(args.config), env.environ, env.maven, store))
         if not verified[0].baseline.upgradeable:
             return verified[0].baseline.stop_reason
-        planned.append(run_planning(ws, verified[0], root, store, config, options, env.maven, env.sources, env.clock))
+        planned.append(run_planning(ws, verified[0], root, store, config, options, env.maven, env.sources, env.clock, env.java))
         return planned[0].stop_reason
 
     ws = workspace.set_up(args.path, root, store, env.clock, args.allow_detached, args.rewind_to, verify)

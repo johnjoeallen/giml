@@ -347,3 +347,32 @@ def test_latest_keeps_a_clean_dependency_clean(world):
     table = {("o:clean", "1.0.1"): ["GHSA-new"]}
     proposals = by_key(dependency_proposals(with_version_advisories(analysis(world, opts), table), opts, world[0], NOW))
     assert "upd:o:clean@1.0.0" not in proposals
+
+
+class BreakingChecker:
+    def __init__(self, table):
+        self.table, self.calls = table, []
+
+    def check(self, coordinate, old, new):
+        self.calls.append((coordinate, old, new))
+        return self.table.get((coordinate, new), ())
+
+
+def test_steps_that_break_an_api_the_project_uses_move_to_the_fallback_keeping_their_ranks(world):
+    from giml.plan.steps import hint_api_breaks
+
+    proposals = dependency_proposals(analysis(world), options(), world[0], NOW)
+    checker = BreakingChecker({("o:lib", "1.0.2"): ("fx.Lib.hello (METHOD_REMOVED)",)})
+    lib = by_key(hint_api_breaks(proposals, checker))["dep:o:lib@1.0.0"]
+    assert [s.rank for s in lib.ladder.steps] == [1] and [s.rank for s in lib.ladder.fallback] == [0]
+    assert lib.ladder.fallback[0].hint == "fx.Lib.hello (METHOD_REMOVED)"
+    assert lib.moves[lib.ladder.fallback[0].rank].changes[0].version == "1.0.2"  # ranks still index the moves
+
+
+def test_groups_and_units_are_not_checked(world):
+    from giml.plan.steps import hint_api_breaks
+
+    proposals = dependency_proposals(analysis(world), options(), world[0], NOW)
+    checker = BreakingChecker({})
+    hint_api_breaks(proposals, checker)
+    assert {c[0] for c in checker.calls} <= {"o:lib", "o:major", "o:deep"} and not any("jackson" in c[0] for c in checker.calls)

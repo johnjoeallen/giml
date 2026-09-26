@@ -23,7 +23,7 @@ from giml.maven.pom_change import Change, apply_changes, describe
 from giml.plan.analysis import Analysis
 from giml.plan.exposure import Exposure, TreeExposure
 from giml.plan.search import Budget, Outcome, Step, Verdict, search
-from giml.plan.steps import Proposal, dependency_proposals, enforcer_proposals, unit_proposals
+from giml.plan.steps import Proposal, dependency_proposals, enforcer_proposals, hint_api_breaks, unit_proposals
 from giml.plan.trial import TrialResult, TrialRunner
 
 Recorder = Callable[[list[dict], TrialResult], None]  # what a trial applied, and how it went (outcome logging, knowledge)
@@ -71,6 +71,7 @@ class PlanOutcome:
     exposure_after: Exposure
     held: dict[str, str]  # the version each coordinate was at when it was planned
     naive: Naive | None = None
+    api_hints: tuple[tuple[str, str], ...] = ()  # (step label, the used API breaks) of steps built last because of them
     final: TreeExposure | None = None  # the result worktree's resolved dependencies and their advisories at the end
 
 
@@ -146,7 +147,8 @@ def _applied(proposals: Mapping[str, Proposal], chosen: Mapping[str, Step]) -> l
 
 
 def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: Reanalyse, trial: TrialRunner,
-            options, clock: Callable[[], datetime.datetime], root_pom: Path, recorder: Recorder | None = None) -> PlanOutcome:  # fmt: skip
+            options, clock: Callable[[], datetime.datetime], root_pom: Path, recorder: Recorder | None = None,
+            api_checker=None) -> PlanOutcome:  # fmt: skip
     """Search and commit the parent/BOM phase, then the dependency phase; ``root`` is the result worktree."""
     started = clock()
     committed: list[Committed] = []
@@ -157,6 +159,7 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
     held: dict[str, str] = {}
 
     naive: list[Naive | None] = []
+    hints: list[tuple[str, str]] = []
 
     def phase(proposals: list[Proposal], kind: str = "unit") -> bool:
         nonlocal builds, stop, detail
@@ -190,10 +193,14 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
         analysis = reanalyse("02-tree.log", True)
         trial.exposure_reference = analysis.exposure
     if stop != "inconclusive":
-        if phase(_dependency_phase(analysis, options, root_pom, trial.reference, clock()), "dependency"):
+        proposals = _dependency_phase(analysis, options, root_pom, trial.reference, clock())
+        if api_checker is not None:
+            proposals = hint_api_breaks(proposals, api_checker)
+            hints.extend((step.label, step.hint) for p in proposals for step in p.ladder.fallback if step.hint)
+        if phase(proposals, "dependency"):
             analysis = reanalyse("03-tree.log", False)
             trial.exposure_reference = analysis.exposure
-    return PlanOutcome(tuple(committed), tuple(left), builds, stop, detail, before, analysis.exposure.exposure, held, next(iter(naive), None), analysis.exposure)
+    return PlanOutcome(tuple(committed), tuple(left), builds, stop, detail, before, analysis.exposure.exposure, held, next(iter(naive), None), tuple(hints), analysis.exposure)
 
 
 def _dependency_phase(analysis: Analysis, options, root_pom: Path, violations, now: datetime.datetime) -> list[Proposal]:

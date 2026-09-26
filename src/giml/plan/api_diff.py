@@ -102,3 +102,53 @@ class ApiChecker:
             report = self.compare(old_jar, new_jar) if old_jar and new_jar else None
             self._memo[key] = tuple(str(b) for b in used_breaks(parse_japicmp(report), self.sources)) if report else ()
         return self._memo[key]
+
+
+class JapicmpTools:
+    """Fetches dependency jars and giml's pinned japicmp with Maven, runs japicmp, and caches jars in ``<state>/tools``.
+
+    Any failure (no network, no such jar, japicmp crashing) answers None: no evidence, so nothing is skipped.
+    """
+
+    def __init__(self, tools_dir: Path, project_dir: Path, maven, java, env, logs: Path, timeout: float) -> None:
+        self.tools_dir, self.project_dir, self.maven, self.java = tools_dir, project_dir, maven, java
+        self.env, self.logs, self.timeout = env, logs, timeout
+        self._runs = 0
+
+    def _copy(self, artifact: str, directory: Path, name: str) -> bool:
+        from giml.gate.setup import tooling
+
+        self._runs += 1
+        result = self.maven(self.project_dir, [f"{tooling()['dependency_plugin'].gav}:copy", f"-Dartifact={artifact}",
+                                               f"-DoutputDirectory={directory}"],
+                            self.logs / f"api-{self._runs:03d}-{name}.log", self.timeout, self.env)  # fmt: skip
+        return result.succeeded
+
+    def _japicmp(self) -> Path | None:
+        from giml.gate.setup import tooling
+
+        tool = tooling()["japicmp"]
+        jar = self.tools_dir / f"{tool.artifact_id}-{tool.version}-{tool.classifier}.jar"
+        if not jar.is_file():
+            self.tools_dir.mkdir(parents=True, exist_ok=True)
+            self._copy(tool.gav, self.tools_dir, "japicmp")
+        return jar if jar.is_file() else None
+
+    def jar(self, coordinate: str, version: str) -> Path | None:
+        group, artifact = coordinate.split(":")
+        directory = self.tools_dir / "jars" / group / artifact / version
+        found = directory / f"{artifact}-{version}.jar"
+        if not found.is_file():
+            directory.mkdir(parents=True, exist_ok=True)
+            self._copy(f"{coordinate}:{version}:jar", directory, f"{artifact}-{version}")
+        return found if found.is_file() else None
+
+    def compare(self, old: Path, new: Path) -> str | None:
+        tool = self._japicmp()
+        if tool is None:
+            return None
+        out = self.tools_dir / "reports" / f"{old.stem}-to-{new.stem}.xml"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        result = self.java(["-jar", str(tool), "--old", str(old), "--new", str(new), "--only-incompatible", "--xml-file", str(out)],
+                           self.timeout, self.env)  # fmt: skip
+        return out.read_text(encoding="utf-8") if result.returncode == 0 and out.is_file() else None

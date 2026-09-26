@@ -25,6 +25,8 @@ from giml.maven.project import discover_reactor
 from giml.maven.tree import resolve_reactor
 from giml.plan.analysis import Analysis, MissingSnapshotError, Sources, analyse, newest_release, tier_status
 from giml.plan.baseline_run import MAVEN_TIMEOUT_SECONDS, BaselineRun
+from giml.gate.assess import run_java
+from giml.plan.api_diff import ApiChecker, JapicmpTools, project_sources
 from giml.plan.exposure import TreeExposure, resolve_exposure
 from giml.plan.execute import PlanOutcome, deferral_records, execute
 from giml.plan.rewind_report import compare_states, render_comparison
@@ -75,7 +77,7 @@ def _final_violations(baseline_run: BaselineRun, project_dir: Path, committed: b
 
 
 def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, store, config: GateConfig, options: PlanningSettings,
-                 maven: MavenRunner, sources: Sources, clock: Callable[[], datetime.datetime]) -> PlanRun:  # fmt: skip
+                 maven: MavenRunner, sources: Sources, clock: Callable[[], datetime.datetime], java=None) -> PlanRun:  # fmt: skip
     now = clock()
     osv_snapshot, central_snapshot = store.latest_snapshot(osv.SOURCE), store.latest_snapshot(central.SOURCE)
     if osv_snapshot is None:
@@ -115,8 +117,10 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
             knowledge.extend(log_trial(store, ws.run_id, ws.repo.project_key, next(trial_numbers), applied, result, tier=tier.earned,
                                        oracle=oracle_strength(record), jdk=baseline_run.jdk.version, now=clock()))  # fmt: skip
 
+        api = JapicmpTools(state_dir / "tools", project_dir, maven, java or run_java, baseline_run.env, logs, MAVEN_TIMEOUT_SECONDS)
+        checker = ApiChecker(project_sources(project_dir), api.jar, api.compare)
         outcome = execute(ws.worktree, ws.run_id, tier.earned or "", first, reanalyse, trial, options, clock, project_dir / "pom.xml",
-                          recorder)  # fmt: skip
+                          recorder, checker)  # fmt: skip
         for record in deferral_records(outcome, ws.repo.project_key, ws.run_id, clock()):
             store.save_deferral(record)
     remaining = _final_violations(baseline_run, project_dir, bool(outcome and outcome.committed))
@@ -162,6 +166,7 @@ def result_section(ws: Workspace, outcome: PlanOutcome | None, remaining: tuple[
             "exposure_before": _exposure_dict(outcome.exposure_before), "exposure_after": _exposure_dict(outcome.exposure_after),
             "naive": {"steps": list(outcome.naive.steps), "passed": outcome.naive.passed, "reason": outcome.naive.reason}
             if outcome.naive else None,
+            "api_hints": [{"step": label, "breaks": hint} for label, hint in outcome.api_hints],
             "committed": [{"label": c.label, "kind": c.kind, "sha": c.sha, "clears": list(c.clears), "edits": list(c.edits)}
                           for c in outcome.committed],
             "left": [{"key": e.key, "coordinates": list(e.members), "reason": e.reason} for e in outcome.left]}  # fmt: skip
@@ -185,6 +190,8 @@ def render_plan_summary(report: dict) -> str:
     if naive:
         verdict = "would have passed" if naive["passed"] else f"would have failed ({naive['reason']})"
         lines.append(f"naive baseline (every first step at once, {len(naive['steps'])} change(s)): {verdict}")
+    for hint in result.get("api_hints", []):
+        lines.append(f"  ~ built last: {hint['step']}: uses {hint['breaks']}")
     for failed in result.get("failed_transitions", []):
         seen = f", failed {failed['prior_failures']} time(s) before" if failed["prior_failures"] else ""
         lines.append(f"  ! {failed['coordinate']} {failed['from']} -> {failed['to']} failed: {failed['failure_class']}{seen}")
