@@ -27,6 +27,7 @@ from giml.plan.analysis import Analysis, MissingSnapshotError, Sources, analyse,
 from giml.plan.baseline_run import MAVEN_TIMEOUT_SECONDS, BaselineRun
 from giml.plan.exposure import TreeExposure, resolve_exposure
 from giml.plan.execute import PlanOutcome, deferral_records, execute
+from giml.plan.rewind_report import compare_states, render_comparison
 from giml.plan.report import ReportInputs, build_report, render_markdown
 from giml.plan.trial import TrialRunner
 from giml.maven.runner import MavenRunner
@@ -119,11 +120,23 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
         parents=first.declarations.parents, skipped=first.declarations.skipped, units=first.unit_plans, warnings=[]))  # fmt: skip
     report["kind"] = "plan"
     report["result"] = result_section(ws, outcome, remaining)
+    if ws.rewind is not None and outcome is not None and outcome.final is not None:
+        report["rewind_comparison"] = compare_states(first.exposure, outcome.final, base_exposure(ws, state_dir, trial_exposure))
     directory = state_dir / "reports" / ws.run_id
     json_path, markdown_path = directory / "plan.json", directory / "plan.md"
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     markdown_path.write_text(render_plan_markdown(report), encoding="utf-8")
     return PlanRun(outcome, remaining, report, json_path, markdown_path, STOP_PLANNED if outcome else STOP_NO_TIER)
+
+
+def base_exposure(ws: Workspace, state_dir: Path, resolve: Callable[[Path], TreeExposure]) -> TreeExposure:
+    """The known-good reference of a rewind run: the exposure of the base commit's own dependency trees."""
+    manager = WorktreeManager(ws.repo, state_dir, ws.run_id)
+    worktree = manager.create_trial(ws.repo.base_sha, 999)
+    try:
+        return resolve(worktree / ws.repo.subdir if ws.repo.subdir else worktree)
+    finally:
+        manager.remove(worktree)
 
 
 def _exposure_dict(exposure) -> dict:
@@ -178,6 +191,8 @@ def render_plan_markdown(report: dict) -> str:
     for entry in result["committed"]:
         lines += [f"## {entry['label']}", f"Commit `{entry['sha']}`. " + (f"Clears {', '.join(entry['clears'])}." if entry["clears"] else "")]
         lines += [f"- {edit}" for edit in entry["edits"]] + [""]
+    if "rewind_comparison" in report:
+        lines += ["## Rewind comparison", "", *render_comparison(report["rewind_comparison"]), ""]
     lines += ["## Review", f"`{result['review']}`", "", "## Clean up", "`giml clean <project>`", "", "---", "",
               "## Analysis at the base commit", "", render_markdown(report).split("\n", 2)[2]]
     return "\n".join(lines)

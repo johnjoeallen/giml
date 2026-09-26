@@ -21,7 +21,7 @@ from giml.core.model import DeferralRecord
 from giml.git.worktrees import commit_all
 from giml.maven.pom_change import Change, apply_changes, describe
 from giml.plan.analysis import Analysis
-from giml.plan.exposure import Exposure
+from giml.plan.exposure import Exposure, TreeExposure
 from giml.plan.search import Budget, Outcome, Step, Verdict, search
 from giml.plan.steps import Proposal, dependency_proposals, enforcer_proposals, unit_proposals
 from giml.plan.trial import TrialResult, TrialRunner
@@ -70,6 +70,7 @@ class PlanOutcome:
     exposure_after: Exposure
     held: dict[str, str]  # the version each coordinate was at when it was planned
     naive: Naive | None = None
+    final: TreeExposure | None = None  # the result worktree's resolved dependencies and their advisories at the end
 
 
 def verdict_of(result: TrialResult, required: frozenset[str] = frozenset()) -> Verdict:
@@ -172,7 +173,7 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
         if phase(_dependency_phase(analysis, options, root_pom, trial.reference, clock()), "dependency"):
             analysis = reanalyse("03-tree.log", False)
             trial.exposure_reference = analysis.exposure
-    return PlanOutcome(tuple(committed), tuple(left), builds, stop, detail, before, analysis.exposure.exposure, held, next(iter(naive), None))
+    return PlanOutcome(tuple(committed), tuple(left), builds, stop, detail, before, analysis.exposure.exposure, held, next(iter(naive), None), analysis.exposure)
 
 
 def _dependency_phase(analysis: Analysis, options, root_pom: Path, violations, now: datetime.datetime) -> list[Proposal]:
