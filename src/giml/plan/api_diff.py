@@ -59,12 +59,19 @@ def _has_word(text: str, word: str) -> bool:
     return re.search(rf"(?<![\w$]){re.escape(word)}(?![\w$])", text) is not None
 
 
+def _simple_name(class_name: str) -> str:
+    """The name sources use for a class: a nested class is reached through its outer one, but a name that starts with
+    ``$`` (Gson's generated-style internal classes) is the whole segment, never an empty string that matches everything."""
+    segment = class_name.rsplit(".", 1)[-1]
+    return segment if segment.startswith("$") else segment.split("$")[0]
+
+
 def used_breaks(breaks: Iterable[Break], sources: Iterable[str]) -> tuple[Break, ...]:
     """The breaks the sources appear to hit: a class-level one when the class is named, a member one when the class and member are."""
     texts = list(sources)
     hits = []
     for found in breaks:
-        simple = found.class_name.rsplit(".", 1)[-1].split("$")[0]
+        simple = _simple_name(found.class_name)
         if any(_has_word(text, simple) and (found.member is None or _has_word(text, found.member)) for text in texts):
             hits.append(found)
     return tuple(hits)

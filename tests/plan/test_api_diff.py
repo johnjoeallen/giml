@@ -124,3 +124,9 @@ def test_a_failing_japicmp_or_a_missing_tool_gives_no_evidence(tmp_path):
     api = tools(tmp_path, CopyMaven(), FakeJava(xml="<x/>", code=1))
     assert api.compare(api.jar("fx:lib", "1"), api.jar("fx:lib", "2")) is None
     assert tools(tmp_path / "b", CopyMaven(fail={"japicmp"}), FakeJava(xml="<x/>")).compare(Path("/a.jar"), Path("/b.jar")) is None
+
+
+def test_a_class_whose_name_starts_with_a_dollar_does_not_match_every_source():
+    internal = Break("com.google.gson.internal.$Gson$Preconditions", None, "CLASS_REMOVED")
+    assert used_breaks([internal], ["class A { Gson g; }"]) == ()  # found on real gson: it once matched everything
+    assert used_breaks([internal], ["Object o = $Gson$Preconditions.checkNotNull(x);"]) == (internal,)
