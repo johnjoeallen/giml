@@ -24,6 +24,7 @@ from giml.maven.enforcer import Violation
 from giml.maven.project import discover_reactor
 from giml.maven.tree import resolve_reactor
 from giml.plan.analysis import Analysis, MissingSnapshotError, Sources, analyse, newest_release, tier_status
+from giml.plan.analysis import _snapshot_warnings as snapshot_warnings
 from giml.plan.baseline_run import MAVEN_TIMEOUT_SECONDS, BaselineRun
 from giml.gate.assess import run_java
 from giml.git.runner import Git
@@ -137,10 +138,12 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
         snapshots={"osv": osv_snapshot.id, "central": central_snapshot.id if central_snapshot else None},
         jdk=baseline_run.jdk.record(), exposure=first.exposure, plans=first.plans,
         latest_available={c: newest_release(v) for c, v in first.available.items()},
-        parents=first.declarations.parents, skipped=first.declarations.skipped, units=first.unit_plans, warnings=[]))  # fmt: skip
+        parents=first.declarations.parents, skipped=first.declarations.skipped, units=first.unit_plans,
+        warnings=snapshot_warnings({"osv": osv_snapshot, "central": central_snapshot}, options.max_snapshot_age_days, now)))  # fmt: skip
     report["kind"] = "plan"
     report["result"] = result_section(ws, outcome, remaining)
     report["result"]["failed_transitions"] = knowledge
+    report["result"]["cache"] = baseline_run.runner.metrics().as_dict()
     if naive_full is not None and outcome is not None:
         report["result"]["naive_comparison"] = {"naive": naive_full.as_dict(), "giml": giml_figures(first, outcome)}
     if ws.rewind is not None and outcome is not None and outcome.final is not None:
@@ -218,6 +221,9 @@ def render_plan_summary(report: dict) -> str:
     for failed in result.get("failed_transitions", []):
         seen = f", failed {failed['prior_failures']} time(s) before" if failed["prior_failures"] else ""
         lines.append(f"  ! {failed['coordinate']} {failed['from']} -> {failed['to']} failed: {failed['failure_class']}{seen}")
+    if result.get("cache"):
+        cache = result["cache"]
+        lines.append(f"cache (baseline and trials): {cache['hits']} hit(s), {cache['misses']} miss(es), {cache['seconds_saved']:.1f} s saved")
     if result["remaining_violations"]:
         lines.append(f"enforcer: {len(result['remaining_violations'])} violation(s) remain: {', '.join(result['remaining_violations'])}")
     else:

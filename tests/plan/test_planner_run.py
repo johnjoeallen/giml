@@ -8,6 +8,7 @@ import pytest
 from giml import workspace
 from giml.core.config import default_gate_config_path, load_gate_config
 from giml.maven.build import StageOutcome
+from giml.maven.cache import CacheMetrics
 from giml.maven.jdk import Jdk
 from giml.plan.baseline import verify_baseline
 from giml.plan.baseline_run import BaselineRun
@@ -25,9 +26,14 @@ class PassingStages:
 
     def __init__(self):
         self.calls = []
+        self._metrics = CacheMetrics()
+
+    def metrics(self):
+        return self._metrics
 
     def run_stage(self, worktree, stage, timeout_seconds):
         self.calls.append(stage)
+        self._metrics.record(stage, False, 1.0)
         return StageOutcome(stage, True, 1.0, Path("/logs/x.log"), None, details={"violations": []} if stage == "enforcer" else None)
 
 
@@ -125,3 +131,27 @@ def test_the_report_only_summary_says_why_nothing_was_proposed(tmp_path, repo): 
     assert lines[0].endswith("0 step(s) committed, 0 left, 0 build(s), stop reason no_usable_tier")
     assert lines[-1] == "report only: no assessment; run `giml assess <path>`" and "enforcer: clean" in lines
     assert not any(l.startswith("exposure:") for l in lines)  # no plan ran, so no before/after
+
+
+def test_a_stale_snapshot_is_warned_about_in_the_report_and_the_cache_figures_are_recorded(tmp_path, repo):  # noqa: F811
+    state = tmp_path / "state"
+    store = SqliteStateStore(state / "state.db")
+    store.record_snapshot(snapshot("osv", age_days=30))
+    store.record_snapshot(snapshot("central", age_days=1))
+    assess_result(store, repo)
+    holder = []
+
+    def verify(ws, temp):
+        stages = PassingStages()
+        baseline = verify_baseline(stages, ws.worktree, 60)
+        log_baseline(store, ws.run_id, ws.repo.project_key, baseline, tier="A", oracle=None, rewind=None, jdk="17")
+        baseline_run = BaselineRun(baseline, {}, state / "b.json", None, stages, Jdk(None, "17", "inherited"), {})
+        holder.append(run_planning(ws, baseline_run, state, store, CONFIG, CONFIG.planning, FakeMaven(), SOURCES, lambda: NOW, NoJava()))
+        return holder[0].stop_reason
+
+    workspace.set_up(repo, state, store, lambda: NOW, verify=verify)
+    report = holder[0].report
+    assert report["warnings"] == ["osv snapshot osv-1 is 30 days old (limit 7); run `giml sync`"]
+    cache = report["result"]["cache"]
+    assert cache["hits"] == 0 and cache["misses"] >= 6 and cache["seconds_spent"] >= 6.0  # the baseline's 3 stages and the trials' builds
+    assert "cache (baseline and trials): 0 hit(s)," in __import__("giml.plan.planner", fromlist=["x"]).render_plan_summary(report)

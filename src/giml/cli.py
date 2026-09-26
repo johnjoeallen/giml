@@ -257,6 +257,8 @@ def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore
     print_baseline(baseline)
     raise_if_stopped(baseline, ws.rewind.sha[:7] if ws.rewind else None)
     run = planned[0]
+    for warning in run.report["warnings"]:
+        print(f"warning: {warning}", file=sys.stderr)
     print(render_plan_summary(run.report), end="")
     print(f"report: {run.markdown_path}")
     print(f"review: {run.report['result']['review']}")
