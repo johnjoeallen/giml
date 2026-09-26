@@ -39,6 +39,9 @@ def real_home(monkeypatch):
 
 
 def lib_source(version: str) -> str:
+    if version == "1.0.3":  # compiles and has no unit tests to trip over, but cannot be loaded: only starting the application shows it
+        return ('package fx;\npublic class Lib { static { if (true) throw new IllegalStateException("Lib 1.0.3 cannot initialise"); }\n'
+                '  public static String hello() { return "hi 1.0.3"; } }\n')
     method = "hello" if version.startswith(("1.0", "2.")) else "greet"
     return f'package fx;\npublic class Lib {{ public static String {method}() {{ return "hi {version}"; }} }}\n'
 
@@ -54,6 +57,54 @@ def publish(repo: Path, version: str, work: Path) -> None:
     (directory / f"lib-{version}.pom").write_text(
         f'<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>fx</groupId>'
         f"<artifactId>lib</artifactId><version>{version}</version></project>")  # fmt: skip
+
+
+SHADE = """  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.2</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>fx.Main</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+"""
+
+MAIN = """package fx;
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
+
+public class Main {
+    public static void main(String[] args) throws Exception {
+        int port = 8080;
+        for (String a : args) if (a.startsWith("--server.port=")) port = Integer.parseInt(a.substring(14));
+        String greeting = new App().run();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
+        server.createContext("/health", ex -> {
+            byte[] body = ("{\\"status\\":\\"UP\\",\\"greeting\\":\\"" + greeting + "\\"}").getBytes();
+            ex.sendResponseHeaders(200, body.length);
+            ex.getResponseBody().write(body);
+            ex.close();
+        });
+        server.start();
+        System.out.println("Started Main in 0.1 seconds");
+        Thread.sleep(600000);
+    }
+}
+"""
 
 
 def publish_other(repo: Path, version: str, work: Path) -> None:
@@ -122,14 +173,17 @@ class Advisories:
 
 class Metadata:
     snapshot_id = "central-fx"
+    extra = ()
 
     def versions(self, coordinate):
-        versions = {"fx:lib": VERSIONS, "fx:other": ["1.0.0", "1.1.0"], "fx:a": ["1.0.0", "1.1.0"], "fx:b": ["1.0.0", "1.1.0"]}.get(str(coordinate))
+        versions = {"fx:lib": [*VERSIONS, *self.extra], "fx:other": ["1.0.0", "1.1.0"], "fx:a": ["1.0.0", "1.1.0"], "fx:b": ["1.0.0", "1.1.0"]}.get(str(coordinate))
         return [VersionRelease(v, WHEN) for v in versions] if versions else None
 
 
-def sources_for(**advisories) -> Sources:
-    return Sources(lambda snapshot: Advisories(**advisories), lambda snapshot: Metadata())
+def sources_for(extra_versions=(), **advisories) -> Sources:
+    metadata = Metadata()
+    metadata.extra = tuple(extra_versions)
+    return Sources(lambda snapshot: Advisories(**advisories), lambda snapshot: metadata)
 
 
 def publish_dup(repo: Path, artifact: str, version: str, work: Path) -> None:
@@ -155,15 +209,20 @@ def scenario(tmp_path, real_home):
 
 
 @pytest.fixture
+def smoke_scenario(tmp_path, real_home):
+    return make_scenario(tmp_path, pair=False, smoke=True)
+
+
+@pytest.fixture
 def pair_scenario(tmp_path, real_home):
     return make_scenario(tmp_path, pair=True)
 
 
-def make_scenario(tmp_path, pair):
+def make_scenario(tmp_path, pair, smoke=False):
     if shutil.which("mvn") is None or shutil.which("javac") is None:
         pytest.skip("mvn and a JDK are required")
     repo = tmp_path / "fxrepo"
-    for version in VERSIONS:
+    for version in [*VERSIONS, "1.0.3"] if smoke else VERSIONS:
         publish(repo, version, tmp_path / "work")
     for version in ("1.0.0", "1.1.0"):
         publish_other(repo, version, tmp_path / "work")
@@ -176,6 +235,11 @@ def make_scenario(tmp_path, pair):
     if pair:
         extra = "".join(f"<dependency><groupId>fx</groupId><artifactId>{a}</artifactId><version>1.0.0</version></dependency>" for a in "ab")
         pom = pom.replace("  </dependencies>", f"    {extra}\n  </dependencies>")
+    if smoke:
+        pom = pom.replace("</project>", SHADE + "</project>")
+        (project / ".giml").mkdir()
+        (project / ".giml" / "settings.yml").write_text("smoke:\n  profile: smoke\n  ready:\n    http: /health\n    contains: UP\n    timeout_seconds: 30\n")
+        (project / "src" / "main" / "java" / "fx" / "Main.java").write_text(MAIN)
     (project / "pom.xml").write_text(pom)
     (project / "src" / "main" / "java" / "fx" / "App.java").write_text(
         "package fx;\npublic class App { public String run() { return Lib.hello(); } }\n")  # fmt: skip
@@ -345,3 +409,16 @@ def test_the_naive_comparison_counts_what_bumping_everything_to_latest_touches_a
     assert {b["to"]: b["failed_stage"] for b in naive["bumps"]} == {"2.0.0": None, "1.1.0": "enforcer"}
     assert naive["cleared"] == ["GHSA-fx"] and giml["cleared"] == ["GHSA-fx"] and giml["touched"] == 1
     assert "naive (each dependency to its newest, on its own): 2 touched, 1 passed" in capsys.readouterr().out
+
+
+def test_a_version_that_only_fails_when_the_application_starts_is_chopped_back_from(smoke_scenario, capsys):
+    smoke_scenario[3].sources = sources_for(extra_versions=["1.0.3"])
+    assert plan(smoke_scenario, "--strategy", "latest") == ExitCode.SUCCESS
+    document = report(smoke_scenario[1])
+    result = document["result"]
+    assert [c["label"] for c in result["committed"]] == ["fx:lib 1.0.0 → 1.0.2 (latest_in_major)"]
+    assert {(t["to"], t["failure_class"]) for t in result["failed_transitions"]} == {("1.0.3", "startup")}
+    baseline = json.loads(next(smoke_scenario[1].glob("reports/*/baseline.json")).read_text())["baseline"]
+    assert [s["stage"] for s in baseline["stages"]] == ["compile", "unit_test", "enforcer", "startup"]
+    assert [s["status"] for s in baseline["stages"]] == ["passed"] * 4
+    assert "failed: startup" in capsys.readouterr().out
