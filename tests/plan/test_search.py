@@ -256,3 +256,42 @@ def test_only_the_strict_checks_see_the_combination_and_its_isolation():
     outcome = search([ladder("a", *PATCH_MINOR, order=0), ladder("b", *PATCH_MINOR, order=1)], cheap, budget(), strict=strict)
     assert all(len(call) == 1 for call in cheap.calls)
     assert outcome.accepted["a"].rank == 0 and outcome.accepted["b"].rank == 1
+
+
+def three(fake):
+    return run([ladder("a", "cve_patch", "cve_minor", order=0), ladder("b", "cve_patch", "cve_minor", order=1),
+                ladder("c", "cve_patch", "cve_minor", order=2)], fake)  # fmt: skip
+
+
+CLASHES = [{("a", 0), ("c", 0)}, {("c", 1), ("a", 0)}, {("a", 0), ("b", 0)}, {("b", 0), ("a", 1)}]
+
+
+def test_a_ladder_deferred_for_an_interaction_is_accepted_again_when_the_others_settle_differently():
+    outcome = three(Fake(interactions=CLASHES))
+    assert {k: s.rank for k, s in outcome.accepted.items()} == {"a": 1, "b": 1, "c": 0} and outcome.deferred == {}
+    assert any(t.phase == "repromote" and t.passed for t in outcome.trace)  # c was deferred first and came back
+
+
+def test_a_repromoted_step_was_verified_strictly_with_everything_that_stays():
+    strict_calls = []
+
+    def strict(chosen):
+        strict_calls.append({(k, s.rank) for k, s in chosen.items()})
+        return Fake(interactions=CLASHES)(chosen)
+
+    outcome = search([ladder("a", "cve_patch", "cve_minor", order=0), ladder("b", "cve_patch", "cve_minor", order=1),
+                      ladder("c", "cve_patch", "cve_minor", order=2)], Fake(), budget(), strict=strict)  # fmt: skip
+    assert outcome.deferred == {} and strict_calls[-1] == {("a", 1), ("b", 1), ("c", 0)}  # the last check was of exactly what stayed
+
+
+def test_repromotion_does_not_retry_ladders_that_failed_on_their_own():
+    fake = Fake(bad={("a", 0), ("a", 1), ("a", 2)})
+    outcome = run([ladder("a", *PATCH_MINOR), ladder("b", *PATCH_MINOR, order=1)], fake)
+    assert "a" in outcome.deferred and not outcome.deferred["a"].interaction
+    assert sum(1 for call in fake.calls if ("a", 0) in call) == 1  # never built again
+
+
+def test_repromotion_stops_with_the_budget():
+    fake = Fake(interactions=[{("a", 0), ("b", 0)}])
+    outcome = run([ladder("a", "cve_patch", order=0), ladder("b", "cve_patch", order=1)], fake, budget=budget(builds=3))
+    assert outcome.builds <= 3

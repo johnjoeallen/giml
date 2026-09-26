@@ -52,6 +52,7 @@ Verify = Callable[[Mapping[str, Step]], Verdict]
 class Deferral:
     reason: str
     tried: tuple[tuple[int, str], ...]  # (rank, why it failed) for every step that was built
+    interaction: bool = False  # deferred because of what it did together with others, so worth another try once they settle
 
 
 @dataclass(frozen=True)
@@ -235,11 +236,36 @@ def _combine(run: _Run, accepted: dict[str, Step], ladders: dict[str, Ladder], d
                 last = culprits[0]
                 others = [k for k in culprits if k != last]
                 names = ", ".join(f"{k} ({accepted[k].label})" for k in others) or "the others"
-                deferred[last] = Deferral(f"interacts with {names}; no further step passed", ())
+                deferred[last] = Deferral(f"interacts with {names}; no further step passed", (), interaction=True)
                 del accepted[last]
         except _Stop as stop:
             _keep_first_verified(accepted, ladders, deferred, run.budget.untried(stop.reason, stop.detail))
             return stop
+    return None
+
+
+def _repromote(run: _Run, accepted: dict[str, Step], ladders: dict[str, Ladder], deferred: dict[str, Deferral]) -> _Stop | None:
+    """Offer each ladder deferred for an interaction another try in the context of what finally stayed, until nothing changes.
+
+    What was deferred was blamed on a combination that has since changed (other culprits backed off or advanced),
+    so its steps may pass now. Every attempt is verified strictly against the full accepted set.
+    """
+    progress = True
+    while progress:
+        progress = False
+        for key in [k for k, d in deferred.items() if d.interaction]:
+            ladder = ladders[key]
+            try:
+                steps = [ladder.steps[found]] if ladder.highest and (found := _bisect(run, ladder, accepted, [])) is not None \
+                    else [] if ladder.highest else ladder.steps  # fmt: skip
+                for step in steps:
+                    if run.check({**accepted, key: step}, "repromote", True).passed:
+                        accepted[key] = step
+                        del deferred[key]
+                        progress = True
+                        break
+            except _Stop as stop:
+                return stop
     return None
 
 
@@ -271,6 +297,8 @@ def search(ladders: Sequence[Ladder], verify: Verify, budget: Budget, strict: Ve
     if stopped is None or stopped.reason != "inconclusive":
         combine_stop = _combine(run, accepted, by_key, deferred)
         stopped = stopped or combine_stop
+        if stopped is None:
+            stopped = _repromote(run, accepted, by_key, deferred)
     ordered_accepted = {ladder.key: accepted[ladder.key] for ladder in ordered if ladder.key in accepted}
     return Outcome(ordered_accepted, deferred, run.builds, stopped.reason if stopped else "complete",
                    stopped.detail if stopped else "", tuple(run.trace))  # fmt: skip
