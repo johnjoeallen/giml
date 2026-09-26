@@ -10,6 +10,7 @@ import pytest
 
 from giml.cli import Environment, ExitCode, main
 from giml.maven.runner import run_maven
+from giml.plan.analysis import Sources
 from tests.git.repo_helpers import fingerprint, git, make_repo
 
 pytestmark = pytest.mark.slow
@@ -27,9 +28,31 @@ class CountingMaven:
     def __init__(self):
         self.runs = 0
 
-    def __call__(self, *args, **kwargs):
-        self.runs += 1
-        return run_maven(*args, **kwargs)
+    def __call__(self, project, args, *rest, **kwargs):
+        if args[0] in ("test-compile", "test", "validate"):  # the stages; the dependency tree resolved afterwards is not one
+            self.runs += 1
+        return run_maven(project, args, *rest, **kwargs)
+
+
+class NoAdvisories:
+    snapshot_id = "osv-none"
+
+    def affecting(self, coordinate, version):
+        return []
+
+
+def seed_osv_snapshot(tmp_path, state) -> None:
+    import dataclasses
+    import datetime
+
+    from giml.core.model import SnapshotInfo
+    from giml.store.sqlite_store import SqliteStateStore
+
+    directory = tmp_path / "osv-snapshot"
+    directory.mkdir()
+    (directory / "manifest.json").write_text(json.dumps({"stats": {}}))
+    with SqliteStateStore(state / "state.db") as store:
+        store.record_snapshot(SnapshotInfo("osv-none", "osv", datetime.datetime.now(datetime.UTC), "hash", directory))
 
 
 def project(tmp_path) -> Path:
@@ -47,9 +70,11 @@ def test_a_repeated_real_baseline_is_answered_entirely_from_the_cache(tmp_path, 
     repo, state, maven = project(tmp_path), tmp_path / "state", CountingMaven()
     before = fingerprint(repo)
     reports = []
+    seed_osv_snapshot(tmp_path, state)
     for _ in range(2):
-        env = Environment(maven=maven)
-        assert main(["--state-dir", str(state), "plan", str(repo)], env) == ExitCode.SUCCESS
+        env = Environment(maven=maven, sources=Sources(lambda snapshot: NoAdvisories(), lambda snapshot: None))
+        # no assessment, so nothing is proposed after the baseline: exit 1
+        assert main(["--state-dir", str(state), "plan", str(repo)], env) == ExitCode.NO_IMPROVEMENT
         out = capsys.readouterr().out
         report = next(line.split(": ", 1)[1] for line in out.splitlines() if line.startswith("baseline report: "))
         reports.append((out, json.loads(Path(report).read_text())))

@@ -123,7 +123,7 @@ class Metadata:
     snapshot_id = "central-fx"
 
     def versions(self, coordinate):
-        versions = {"fx:lib": VERSIONS, "fx:other": ["1.0.0", "1.1.0"]}.get(str(coordinate))
+        versions = {"fx:lib": VERSIONS, "fx:other": ["1.0.0", "1.1.0"], "fx:a": ["1.0.0", "1.1.0"], "fx:b": ["1.0.0", "1.1.0"]}.get(str(coordinate))
         return [VersionRelease(v, WHEN) for v in versions] if versions else None
 
 
@@ -131,8 +131,34 @@ def sources_for(**advisories) -> Sources:
     return Sources(lambda snapshot: Advisories(**advisories), lambda snapshot: Metadata())
 
 
+def publish_dup(repo: Path, artifact: str, version: str, work: Path) -> None:
+    """fx:a and fx:b at 1.1.0 both contain class fx.Dup: each is fine next to the other's 1.0, together they duplicate it."""
+    directory = repo / "fx" / artifact / version
+    directory.mkdir(parents=True)
+    out = work / f"{artifact}-{version}" / "out"
+    classes = [artifact.upper()] + (["Dup"] if version == "1.1.0" else [])
+    for name in classes:
+        source = work / f"{artifact}-{version}" / "fx" / f"{name}.java"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(f"package fx;\npublic class {name} {{}}\n")
+        subprocess.run(["javac", "--release", "17", "-d", str(out), str(source)], check=True, capture_output=True)
+    subprocess.run(["jar", "cf", str(directory / f"{artifact}-{version}.jar"), "-C", str(out), "."], check=True)
+    (directory / f"{artifact}-{version}.pom").write_text(
+        f'<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>fx</groupId>'
+        f"<artifactId>{artifact}</artifactId><version>{version}</version></project>")  # fmt: skip
+
+
 @pytest.fixture
 def scenario(tmp_path, real_home):
+    return make_scenario(tmp_path, pair=False)
+
+
+@pytest.fixture
+def pair_scenario(tmp_path, real_home):
+    return make_scenario(tmp_path, pair=True)
+
+
+def make_scenario(tmp_path, pair):
     if shutil.which("mvn") is None or shutil.which("javac") is None:
         pytest.skip("mvn and a JDK are required")
     repo = tmp_path / "fxrepo"
@@ -140,9 +166,16 @@ def scenario(tmp_path, real_home):
         publish(repo, version, tmp_path / "work")
     for version in ("1.0.0", "1.1.0"):
         publish_other(repo, version, tmp_path / "work")
+    for artifact in ("a", "b"):
+        for version in ("1.0.0", "1.1.0"):
+            publish_dup(repo, artifact, version, tmp_path / "work")
     project = tmp_path / "app"
     (project / "src" / "main" / "java" / "fx").mkdir(parents=True)
-    (project / "pom.xml").write_text(APP_POM.format(repo=repo))
+    pom = APP_POM.format(repo=repo)
+    if pair:
+        extra = "".join(f"<dependency><groupId>fx</groupId><artifactId>{a}</artifactId><version>1.0.0</version></dependency>" for a in "ab")
+        pom = pom.replace("  </dependencies>", f"    {extra}\n  </dependencies>")
+    (project / "pom.xml").write_text(pom)
     (project / "src" / "main" / "java" / "fx" / "App.java").write_text(
         "package fx;\npublic class App { public String run() { return Lib.hello(); } }\n")  # fmt: skip
     make_repo(project)
@@ -226,3 +259,28 @@ def test_a_general_update_that_splits_a_dependency_across_two_versions_fails_the
     (left,) = [e for e in result["left"] if e["coordinates"] == ["fx:other"]]
     assert "enforcer" in left["reason"] and result["enforcer_clean"]
     assert {(t["to"], t["failure_class"]) for t in result["failed_transitions"]} == {("1.1.0", "enforcer_convergence")}
+
+
+def test_a_rewind_run_reaches_the_version_the_developer_moved_to_and_compares_the_three_states(scenario, capsys):
+    project = scenario[0]
+    pom = project / "pom.xml"
+    pom.write_text(pom.read_text().replace("<version>1.0.0</version>\n    </dependency>\n    <dependency>", "<version>1.0.2</version>\n    </dependency>\n    <dependency>", 1))
+    git(project, "commit", "-qam", "developer upgrades fx:lib")
+    assert plan(scenario, "--rewind-to", "HEAD~1") == ExitCode.SUCCESS
+    document = report(scenario[1])
+    assert [c["label"] for c in document["result"]["committed"]] == ["fx:lib 1.0.0 → 1.0.2 (cve_patch)"]
+    (row,) = [r for r in document["rewind_comparison"]["rows"] if r["coordinate"] == "fx:lib"]
+    assert (row["rewound"]["versions"], row["result"]["versions"], row["base"]["versions"]) == (["1.0.0"], ["1.0.2"], ["1.0.2"])
+    assert (row["rewound"]["advisories"], row["result"]["advisories"], row["base"]["advisories"]) == (1, 0, 0)
+    assert "## Rewind comparison" in next(scenario[1].glob("reports/*/plan.md")).read_text()
+
+
+def test_two_updates_that_only_clash_together_are_isolated_and_the_less_important_one_is_deferred(pair_scenario, capsys):
+    assert plan(pair_scenario, "--scope", "general") == ExitCode.SUCCESS
+    result = report(pair_scenario[1])["result"]
+    labels = [c["label"] for c in result["committed"]]
+    assert "fx:lib 1.0.0 → 1.0.2 (cve_patch)" in labels and any(l.startswith("fx:a ") for l in labels)
+    assert not any(l.startswith("fx:b ") for l in labels)  # the later of the two clashing updates stays behind
+    left = {e["coordinates"][0]: e["reason"] for e in result["left"]}
+    assert "interacts with" in left["fx:b"] and "fx:a" in left["fx:b"]
+    assert result["enforcer_clean"]
