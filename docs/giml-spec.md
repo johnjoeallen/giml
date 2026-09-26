@@ -162,7 +162,7 @@ Define these in `giml.core` as `typing.Protocol` classes. Implement only the loc
 | `StateStore` | SQLite | PostgreSQL |
 | `ResultCache` | local content-addressed directory | shared cache service |
 | `PublishTarget` | writes report + leaves branch | opens/updates PRs |
-| `SmokeSettingsProvider` | reads `.redkite/settings.yml` | any other source |
+| `SmokeSettingsProvider` | reads `.giml/settings.yml` | any other source |
 | `RiskScorer` | deterministic default (never recommends a skip) | trained model: pass/fail probability of a single candidate, deciding skip, build or escalate to the next ladder level (section 16) |
 | `AdvisorySource` | local OSV snapshot | shared advisory service |
 | `ArtifactMetadataSource` | local Maven Central snapshot | shared |
@@ -208,7 +208,7 @@ To create realistic "behind on dependencies" states from a project's own history
 1. Preflight (section 5.1) runs as normal on the developer's repository. `<commit>` must resolve, must be an ancestor of the base commit, and must contain the project's root `pom.xml`; otherwise exit 5.
 2. The result branch is named `giml/rewind/<base-sha-short>/<UTC-timestamp>` so it can never be mistaken for a normal result.
 3. In the result worktree, every reactor `pom.xml` (section 3, as discovered at the base commit) that also exists at `<commit>` is replaced by its content there; a module `pom.xml` that did not exist yet keeps its base content and is listed in the commit message and the report. All other files stay at the base commit. This is committed as the first commit on the result branch, with a message starting `[giml-rewind]` that names the rewind commit and states it is synthetic.
-4. The rewound state is the run's **baseline** (section 9.1). Verification rules (gate config, `.redkite/settings.yml`, tier) still come from the base commit (hard rule 7); only `pom.xml` files are rewound. If build or unit tests fail at the rewound baseline, the run stops with stop reason `rewind_baseline_failed` (the base code does not work with the old POM), and this is recorded as an unusable rewind point.
+4. The rewound state is the run's **baseline** (section 9.1). Verification rules (gate config, `.giml/settings.yml`, tier) still come from the base commit (hard rule 7); only `pom.xml` files are rewound. If build or unit tests fail at the rewound baseline, the run stops with stop reason `rewind_baseline_failed` (the base code does not work with the old POM), and this is recorded as an unusable rewind point.
 5. If the rewound `pom.xml` files lack quality tooling (section 3), giml adds it in the setup commit that follows the rewind commit, exactly as for a normal run.
 6. Planning then proceeds forward from the rewound state as in a normal run.
 7. The base commit's own `pom.xml` is a known-good reference. The report compares, per dependency: rewound version, giml's result, and the base commit's version, with the CVE exposure of each state.
@@ -278,7 +278,7 @@ Notes:
 
 ### 6.2 Project declaration
 
-The project declares its target tier (in `.redkite/settings.yml`, section 12, key `tier`). The **earned tier** is what measurement supports. Behaviour follows the earned tier. The report lists what was missed for the declared tier and how far off each metric was.
+The project declares its target tier (in `.giml/settings.yml`, section 12, key `tier`). The **earned tier** is what measurement supports. Behaviour follows the earned tier. The report lists what was missed for the declared tier and how far off each metric was.
 
 ### 6.3 Assessment procedure (`giml assess`)
 
@@ -559,7 +559,7 @@ Proves the **packaged application** still boots with upgraded dependencies. Mode
 
 ### 12.1 Settings file
 
-`.redkite/settings.yml` (committed in the repo; CONFIRM exact name and location, which may differ from the earlier `.redkite/settings.xml` mentioned):
+`.giml/settings.yml` (committed in the repo; the same file that already carries `jdk`, `java_home` and `allow_exclusions`, section 3.1; the startup check adds a `smoke` section; confirmed 2026-09-26):
 
 ```yaml
 version: 1
@@ -769,7 +769,7 @@ Work in order; stop at each checkpoint.
 2. ~~What OSV/Maven Central code can be reused?~~ Answered 2026-09-24: RedKite, not Arete; see section 3.
 3. ~~Unpushed commits.~~ Answered 2026-09-24: allowed; only uncommitted changes block a run.
 4. ~~Submodules/LFS.~~ Answered 2026-09-24: submodules refused; LFS allowed with downloads disabled (revised the same day).
-5. Exact name and location of the settings file: `.redkite/settings.yml` vs the earlier `.redkite/settings.xml`; and which keys it should carry. (M6)
+5. ~~Exact name and location of the settings file~~ Answered 2026-09-26: `.giml/settings.yml`, one file for all project settings; the `smoke` keys are those of section 12.1. (M6)
 6. Initial project set: which repositories, and which is deliberately behind on dependencies. (M3/M5) Partly answered 2026-09-24: redkite, arete and grip (all github.com/johnjoeallen, each with `.giml/settings.yml` `jdk: 21`); chronograf dropped. The deliberately-behind project for M5 is still open.
 7. ~~Initial tier numbers.~~ Answered 2026-09-24: keep config version 3 as is. The M3 survey (redkite, chronograf) found both projects far below Tier B, so it cannot calibrate the boundaries; revisit when a project scores near one.
 8. ~~Metric definitions.~~ Answered 2026-09-24: the policy's 80% is PIT mutation coverage (killed / all mutants) and its 85% is test strength (killed / mutants in covered code); Tier B already says exactly this.
