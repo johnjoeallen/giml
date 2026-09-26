@@ -121,6 +121,9 @@ Newest first. One line each: date, decision, reason.
 
 ## Gotchas
 
+- A JVM takes `user.home` from the password database, not `$HOME`: the startup runner passes `-Duser.home=<ephemeral dir>` (found 2026-09-26 when redkite's first startup run opened the developer's real `~/.redkite/redkite.mv.db` and read its `redkite.properties`; the file's mtime changed and a `redkite.trace.db` was written before the fix; later runs leave it untouched, checked by mtime and size). Cached results from before that fix were invalidated (cache schema 4).
+- Redkite's startup settings (scratch clones): `smoke.artifact: red-kite-server/target/red-kite-*.jar`, `properties: {redkite.port: ${PORT}}`, `ready: {http: /health, contains: ok}`; it needs no profile and no database provisioning (H2 file under the ephemeral home). The app binds all interfaces, so giml cannot enforce loopback for a non-Spring application. Real result: startup passes at the baseline for both the current and the behind redkite, and in the trials of the latest+general plan (5 steps, 9 min with PIT off).
+
 - The startup check gives the application a minimal environment (PATH, JAVA_HOME, temp settings, its own HOME) plus the settings' `env`; the developer's other variables are never passed on. The database password reaches `psql` only as `PGPASSWORD` and the application only through a `${DB_PASSWORD}` placeholder, and is removed from the application's log. Never run giml's tests against a shared database: the real-PostgreSQL tests start their own container and never touch other containers.
 - `git`-visible effect: `StageOutcome.retryable` now includes failure class `unavailable`, and the stage cache never stores it.
 
