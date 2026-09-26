@@ -91,9 +91,10 @@ class TrialRunner:
         self.exposure_reference: TreeExposure | None = None  # the tip's exposure: a candidate may not be worse than this
         self.reference = baseline.reference_violations  # what a candidate may keep; shrinks as commits resolve violations
 
-    def _stages(self) -> list[str]:
+    def _stages(self, pit: bool) -> list[str]:
         oracle = self.baseline.oracle_stages
-        return [s for s in TRIAL_ORDER if (s in oracle if s != "enforcer" else self.baseline.enforcer_mode in ("clean", "reference"))]
+        return [s for s in TRIAL_ORDER if (pit or s != "pit")
+                and (s in oracle if s != "enforcer" else self.baseline.enforcer_mode in ("clean", "reference"))]  # fmt: skip
 
     def _run(self, project: Path, stage: str) -> StageOutcome:
         outcome, attempts = self.runner.run_stage(project, stage, self.timeout), 1
@@ -111,14 +112,18 @@ class TrialRunner:
             self.reference = outcome.violations
         return self.reference
 
-    def verify(self, changes: Sequence[Change]) -> TrialResult:
-        """Apply ``changes`` to a trial worktree at the result branch's tip and run the stages there."""
+    def verify(self, changes: Sequence[Change], pit: bool = True) -> TrialResult:
+        """Apply ``changes`` to a trial worktree at the result branch's tip and run the stages there.
+
+        ``pit=False`` leaves out PIT, the slowest stage: the search verifies its candidates without it and runs it
+        only on the state it means to commit (a stage whose result is already cached costs nothing to repeat).
+        """
         self._trials += 1
         tip = Git(self.result_worktree).out("rev-parse", "HEAD")
         trial = self.manager.create_trial(tip, self._trials)
         try:
             apply_changes([rebase(change, self.result_worktree, trial) for change in changes])
-            return self._stages_in(trial / self.subdir if self.subdir else trial)
+            return self._stages_in(trial / self.subdir if self.subdir else trial, pit)
         finally:
             self.manager.remove(trial)
 
@@ -145,7 +150,7 @@ class TrialRunner:
         failure = _digest(failure_class, lines) if lines else None
         return StageOutcome("exposure", failure is None, time.monotonic() - started, Path(os.devnull), failure)
 
-    def _stages_in(self, project: Path) -> TrialResult:
+    def _stages_in(self, project: Path, pit: bool) -> TrialResult:
         outcomes: list[StageOutcome] = []
         resolved: tuple[Violation, ...] = ()
         early = self._exposure_stage(project)
@@ -153,7 +158,7 @@ class TrialRunner:
             outcomes.append(early)
             if not early.passed:
                 return TrialResult(False, False, "exposure", early.failure, tuple(outcomes), (), ())
-        for stage in self._stages():
+        for stage in self._stages(pit):
             outcome = self._run(project, stage)
             outcomes.append(outcome)
             if outcome.retryable:

@@ -50,7 +50,7 @@ class FakeTrial:
     def refresh_reference(self):
         self.refreshed = getattr(self, "refreshed", 0) + 1
 
-    def verify(self, changes):
+    def verify(self, changes, pit=True):
         self.calls.append(changes)
         versions = {getattr(c, "version", None) for c in changes}
         return result(not (versions & set(self.poison)))
@@ -120,7 +120,7 @@ def test_the_build_budget_stops_the_run_and_defers_the_rest(repo, world):
 
 def test_an_inconclusive_trial_stops_without_committing_a_guess(repo, world):
     class Broken(FakeTrial):
-        def verify(self, changes):
+        def verify(self, changes, pit=True):
             return result(False, inconclusive=True)
 
     outcome = run(repo, world, Broken())
@@ -182,8 +182,8 @@ def test_a_baseline_convergence_conflict_is_aligned_and_committed_when_it_resolv
     conflict = Violation("DependencyConvergence", "o:clean", {"versions": ["1.0.0", "1.0.1"]})
 
     class Resolving(FakeTrial):
-        def verify(self, changes):
-            base = super().verify(changes)
+        def verify(self, changes, pit=True):
+            base = super().verify(changes, pit)
             return TrialResult(True, False, None, None, base.outcomes, (), (conflict,)) if changes else base
 
     trial = Resolving()
@@ -199,3 +199,29 @@ def test_a_vulnerability_failure_costs_no_build_and_is_named():
     verdict = verdict_of(TrialResult(False, False, "exposure", failure, (outcome,), (), ()))
     assert (verdict.passed, verdict.cost) == (False, 0)
     assert verdict.reason == "exposure vulnerability_worse: exposure rose from none to LOW x1 (1 in all)"
+
+
+class PitAware(FakeTrial):
+    """Passes without PIT unless poisoned; with PIT, versions in ``pit_poison`` fail."""
+
+    def __init__(self, pit_poison=()):
+        super().__init__()
+        self.pit_poison, self.flags = set(pit_poison), []
+
+    def verify(self, changes, pit=True):
+        self.flags.append(pit)
+        versions = {getattr(c, "version", None) for c in changes}
+        return result(not (pit and versions & self.pit_poison))
+
+
+def test_candidates_are_built_without_pit_and_only_what_is_kept_runs_it(repo, world):
+    trial = PitAware()
+    outcome = run(repo, world, trial)
+    assert len(outcome.committed) == 3 and trial.flags.count(True) == 1  # the combination, once
+    assert trial.flags[:3] == [False, False, False]
+
+
+def test_a_step_that_only_pit_rejects_is_backed_off_or_deferred(repo, world):
+    outcome = run(repo, world, PitAware(pit_poison={"1.0.2"}))
+    lib = next(c for c in outcome.committed if "o:lib" in c.label)
+    assert lib.kind == "cve_minor" and "<version>1.1.0</version>" in (repo / "pom.xml").read_text()

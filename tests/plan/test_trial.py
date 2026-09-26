@@ -350,3 +350,9 @@ def test_pit_that_finds_no_mutants_is_a_failure_not_a_pass(world):
 
 def test_without_floors_pit_only_has_to_run(world):
     assert runner(world, pit_stages(KILLED=1, SURVIVED=9), pit_baseline(world)).verify([bump(world[2])]).passed
+
+
+def test_a_trial_can_leave_pit_out(world):
+    stages = pit_stages(KILLED=9, SURVIVED=1)
+    trial_runner = runner(world, stages, pit_baseline(world))
+    assert trial_runner.verify([bump(world[2])], pit=False).passed and stages.stages == ["compile", "enforcer", "unit_test"]

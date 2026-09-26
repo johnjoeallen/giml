@@ -136,18 +136,20 @@ class _Run:
     verify: Verify
     budget: Budget
     builds: int = 0
-    cache: dict[frozenset, Verdict] = field(default_factory=dict)
+    strict: Verify | None = None  # a costlier verification that only what the search means to keep must pass
+    cache: dict[tuple[bool, frozenset], Verdict] = field(default_factory=dict)
     trace: list[TraceEntry] = field(default_factory=list)
 
-    def check(self, chosen: Mapping[str, Step], phase: str) -> Verdict:
+    def check(self, chosen: Mapping[str, Step], phase: str, strict: bool = False) -> Verdict:
         """Verify a set of steps once: repeats are answered from memory, the budget is enforced, inconclusive stops."""
-        signature = frozenset((key, step.rank) for key, step in chosen.items())
+        strict = strict and self.strict is not None
+        signature = (strict, frozenset((key, step.rank) for key, step in chosen.items()))
         if signature in self.cache:
             return self.cache[signature]
         stop = self.budget.exhausted(self.builds)
         if stop:
             raise _Stop(stop)
-        verdict = self.verify(dict(sorted(chosen.items())))
+        verdict = (self.strict if strict else self.verify)(dict(sorted(chosen.items())))
         self.builds += verdict.cost
         self.cache[signature] = verdict
         single = next(iter(chosen.values())) if len(chosen) == 1 else None
@@ -219,12 +221,15 @@ def _fix_ladders(run: _Run, ladders: list[Ladder]) -> tuple[dict[str, Step], dic
 
 
 def _combine(run: _Run, accepted: dict[str, Step], ladders: dict[str, Ladder], deferred: dict[str, Deferral]) -> _Stop | None:
-    """Verify the accepted steps together; on failure isolate the culprits and advance or defer them."""
-    while len(accepted) >= 2:
+    """Verify the accepted steps together; on failure isolate the culprits and advance or defer them.
+
+    With a strict verification even a single accepted step is checked, and every check here uses it.
+    """
+    while len(accepted) >= (1 if run.strict else 2):
         try:
-            if run.check(accepted, "combine").passed:
+            if run.check(accepted, "combine", True).passed:
                 return None
-            culprits = ddmin(list(accepted), lambda subset: not run.check({k: accepted[k] for k in subset}, "isolate").passed)
+            culprits = ddmin(list(accepted), lambda subset: not run.check({k: accepted[k] for k in subset}, "isolate", True).passed)
             culprits = sorted(culprits, key=lambda key: ladders[key].order, reverse=True)  # the least important first
             if not _advance(run, accepted, ladders, culprits):
                 last = culprits[0]
@@ -244,7 +249,7 @@ def _advance(run: _Run, accepted: dict[str, Step], ladders: dict[str, Ladder], c
         ladder, rank = ladders[key], accepted[key].rank
         for step in (reversed(ladder.steps[:rank]) if ladder.highest else ladder.steps[rank + 1 :]):
             candidate = {**accepted, key: step}
-            if run.check(candidate, "advance").passed:
+            if run.check(candidate, "advance", True).passed:
                 accepted[key] = step
                 return True
     return False
@@ -258,10 +263,10 @@ def _keep_first_verified(accepted: dict[str, Step], ladders: dict[str, Ladder], 
         del accepted[key]
 
 
-def search(ladders: Sequence[Ladder], verify: Verify, budget: Budget) -> Outcome:
+def search(ladders: Sequence[Ladder], verify: Verify, budget: Budget, strict: Verify | None = None) -> Outcome:
     ordered = sorted(ladders, key=lambda ladder: ladder.order)
     by_key = {ladder.key: ladder for ladder in ordered}
-    run = _Run(verify, budget)
+    run = _Run(verify, budget, strict=strict)
     accepted, deferred, stopped = _fix_ladders(run, ordered)
     if stopped is None or stopped.reason != "inconclusive":
         combine_stop = _combine(run, accepted, by_key, deferred)

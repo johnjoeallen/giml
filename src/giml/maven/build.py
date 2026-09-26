@@ -20,6 +20,8 @@ from giml.maven.failures import INFRASTRUCTURE, Failure, classify
 from giml.maven.project import discover_reactor
 from giml.maven.runner import Env, MavenRunner
 
+PIT_TIMEOUT_CONSTANT_MS = 1500
+
 # The enforcer is skipped where it is not the stage under test, so a candidate is not blamed for a
 # violation the baseline already had (spec 9.1); the enforcer stage runs it alone.
 STAGES: dict[str, tuple[str, ...]] = {
@@ -29,7 +31,11 @@ STAGES: dict[str, tuple[str, ...]] = {
     # Failsafe-style tests (BDD suites usually run here): no unit tests again, so the stage isolates the integration ones.
     "integration": ("verify", "-Denforcer.skip=true", "-Dtest=NoSuchTest", "-Dsurefire.failIfNoSpecifiedTests=false",
                     "-DfailIfNoTests=false"),
-    "pit": ("test-compile", "org.pitest:pitest-maven:mutationCoverage", "-Denforcer.skip=true", "-DtimestampedReports=false"),
+    # A mutant that loops forever waits timeoutFactor x its test time + timeoutConstant before PIT gives up on it, and that
+    # wait dominates a run on projects with many such mutants (PIT's default constant is 4000 ms). A timed-out mutant counts
+    # as detected either way; the baseline is measured with the same values, so the floors stay comparable.
+    "pit": ("test-compile", "org.pitest:pitest-maven:mutationCoverage", "-Denforcer.skip=true", "-DtimestampedReports=false",
+            f"-DtimeoutConstant={PIT_TIMEOUT_CONSTANT_MS}", "-DtimeoutFactor=1.25"),
 }
 
 

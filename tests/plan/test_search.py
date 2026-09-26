@@ -225,3 +225,34 @@ def test_an_interaction_found_at_the_combination_backs_a_highest_ladder_off_not_
     fake = Fake(interactions=[{("a", 3), ("c", 0)}])
     outcome = run([highest("a", 4, order=1), ladder("c", "cve_patch", "cve_minor", order=0)], fake)
     assert outcome.accepted["a"].rank < 3 and outcome.accepted["c"].rank == 0
+
+
+def test_without_a_strict_verification_nothing_changes():
+    fake = Fake()
+    outcome = search([ladder("a", *PATCH_MINOR)], fake, budget())
+    assert outcome.builds == 1 and len(fake.calls) == 1
+
+
+def test_a_strict_verification_checks_what_will_be_kept_even_a_single_step():
+    cheap, strict = Fake(), Fake()
+    outcome = search([ladder("a", *PATCH_MINOR)], cheap, budget(), strict=strict)
+    assert outcome.accepted["a"].rank == 0 and len(cheap.calls) == 1 and len(strict.calls) == 1 and outcome.builds == 2
+
+
+def test_a_step_that_only_the_strict_verification_rejects_advances_the_ladder():
+    cheap, strict = Fake(), Fake(bad={("a", 0)})
+    outcome = search([ladder("a", *PATCH_MINOR)], cheap, budget(), strict=strict)
+    assert outcome.accepted["a"].rank == 1  # cve_minor, taken after cve_patch failed the strict check
+
+
+def test_a_step_that_fails_strictly_with_nothing_further_is_deferred_and_the_others_stay():
+    cheap, strict = Fake(), Fake(bad={("a", 0)})
+    outcome = search([ladder("a", "cve_patch", order=0), ladder("b", *PATCH_MINOR, order=1)], cheap, budget(), strict=strict)
+    assert list(outcome.accepted) == ["b"] and "a" in outcome.deferred
+
+
+def test_only_the_strict_checks_see_the_combination_and_its_isolation():
+    cheap, strict = Fake(), Fake(interactions=[{("a", 0), ("b", 0)}])
+    outcome = search([ladder("a", *PATCH_MINOR, order=0), ladder("b", *PATCH_MINOR, order=1)], cheap, budget(), strict=strict)
+    assert all(len(call) == 1 for call in cheap.calls)
+    assert outcome.accepted["a"].rank == 0 and outcome.accepted["b"].rank == 1

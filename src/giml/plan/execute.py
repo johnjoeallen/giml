@@ -146,11 +146,14 @@ def execute(root: Path, run_id: str, tier: str, analysis: Analysis, reanalyse: R
         by_key = {p.ladder.key: p for p in proposals}
         budget = Budget(max(options.max_builds - builds, 0), options.max_wall_minutes, clock, started)
 
-        def verify(chosen: Mapping[str, Step]) -> Verdict:
-            required = frozenset(i for key in chosen for i in by_key[key].resolves)
-            return verdict_of(trial.verify(_changes_of(by_key, chosen)), required)
+        def verifier(pit: bool) -> Callable[[Mapping[str, Step]], Verdict]:
+            def verify(chosen: Mapping[str, Step]) -> Verdict:
+                required = frozenset(i for key in chosen for i in by_key[key].resolves)
+                return verdict_of(trial.verify(_changes_of(by_key, chosen), pit=pit), required)
 
-        outcome = search([p.ladder for p in proposals], verify, budget)
+            return verify
+
+        outcome = search([p.ladder for p in proposals], verifier(False), budget, strict=verifier(True))
         builds += outcome.builds
         if proposals and kind == "dependency":
             naive.append(_naive(proposals, trial))
@@ -187,7 +190,7 @@ def _naive(proposals: list[Proposal], trial: TrialRunner) -> Naive | None:
     if not firsts:
         return None
     changes = [change for p in firsts.values() for change in p.moves[0].changes]
-    verdict = verdict_of(trial.verify(changes))
+    verdict = verdict_of(trial.verify(changes, pit=False))
     return Naive(tuple(p.ladder.steps[0].label for p in firsts.values()), verdict.passed, verdict.reason)
 
 
