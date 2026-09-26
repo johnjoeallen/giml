@@ -25,10 +25,10 @@ These are enforced by code and tests, not just convention:
 
 ## Current status
 
-- Milestone: **M5 (deterministic planner) implemented, awaiting review** (2026-09-25). `giml plan` analyses, searches (build budget, ddmin isolation, deferrals), commits one step per accepted change, aligns baseline convergence conflicts (enforcer pins that must actually resolve the conflict), refreshes the enforcer reference set after each committed phase, and writes `plan.{json,md}` with the naive-baseline comparison. Scope `cve`/`general` and strategy `conservative`/`latest` work. Not built: japicmp filtering, re-promotion, rewind comparison, `knowledge_transition`.
+- Milestone: **M5 (deterministic planner) implemented, awaiting review** (2026-09-25). `giml plan` analyses, searches (build budget, ddmin isolation, deferrals), commits one step per accepted change, aligns baseline convergence conflicts (enforcer pins that must actually resolve the conflict), refreshes the enforcer reference set after each committed phase, and writes `plan.{json,md}` with the naive-baseline comparison. Scope `cve`/`general` and strategy `conservative`/`latest` work. The rewind comparison (spec 5.3 item 7) is in `plan.md`. Not built: japicmp filtering, re-promotion, `knowledge_transition`.
 - M1 accepted 2026-09-24. M2 checkpoint recorded (dff9705). M3 accepted 2026-09-25 (survey: redkite Tier A at 970df7f, grip and arete no tier yet).
 - Self-gate at M5a: Tier B PASS (line 99.09%, branch 96.29%, test strength 88.08%, mutation coverage 88.04%, excluded share 1.76%, 0 flaky of 5 runs). 1,194 fast tests pass.
-- Self-gate after `latest`: Tier B PASS (line 99.09%, branch 96.30%, test strength 87.78%, mutation 87.75%, 0 flaky). 1,211 fast tests.
+- Self-gate at M5 (2026-09-26): Tier B PASS (line 98.87%, branch 96.32%, test strength 87.66%, mutation 87.51%, 0 flaky). 1,245 fast tests.
 - M5 verification chain (2026-09-26): trials run exposure (worse vulnerabilities fail without a build), compile, enforcer, unit, integration (when the project has Failsafe-style tests); PIT runs once on the state to keep (strict check in `search`), with floors = earned tier thresholds or the baseline's if lower. Real run on scratch redkite (latest, jackson-core newest visible versions vulnerable): 3 steps, exposure CRITICAL to none, 72 min total (baseline PIT 33 min, one final PIT) versus 168 min when every trial ran PIT. Lowering `timeoutConstant` from 4000 to 1500 ms changed baseline PIT only from 2012 s to 1990 s, so minion timeouts are not the dominant cost.
 - M5 `latest` evidence (scratch redkite with gson, junit, h2, thymeleaf reverted, `--strategy latest --scope general`): 4 builds, all four newest same-major versions passed first time (thymeleaf 3.1.5, h2 2.5.250, gson 2.14.0, junit 5.14.4), exposure CRITICAL to none, enforcer clean, 7m10s. The chop-back path is covered by unit tests only, not yet seen on a real failing newest version.
 - M5 evidence (scratch clone of redkite with h2 and thymeleaf downgraded, Tier A): `giml plan` committed thymeleaf 3.0.11 to 3.1.5 and h2 2.1.214 to 2.2.220, 3 builds, exposure CRITICAL (4 advisories) to none, enforcer clean, exit 0 (4m49s); a repeat with `--scope general` took 0 builds (all cached). Rewind on redkite failed at both points tried (old module layout; old POMs do not compile), so rewind acceptance is still open. grip earned no tier, so it stays report-only.
@@ -116,6 +116,9 @@ Newest first. One line each: date, decision, reason.
 
 ## Gotchas
 
+- YAML reads an unquoted `off` as false; `_Section.choice` maps it back. Never run two `scripts/selfgate.py` at once (they share `mutants/`), and `pkill -f selfgate` kills the shell that matched it.
+- `giml plan --gate-config` is a subcommand option (after `plan`), unlike `--state-dir`.
+- Real rewind run on scratch redkite (rewind to its own newer commit): the report's comparison table lists gson, h2, junit and others across rewound, result and base states.
 - A pgrep-based wait loop matches its own command line and never ends; wait on a PID (`kill -0`) or an output file instead. Cloning redkite needs `GIT_LFS_SKIP_SMUDGE=1` when the LFS objects are not on the remote.
 - Trial and commit both rebase text spans: each step's commit is rebuilt from the original files with the steps so far applied together (`plan/execute.py`), never by applying steps one after another.
 Project-specific traps discovered while working (tool quirks, platform differences, flaky areas). One line each.
