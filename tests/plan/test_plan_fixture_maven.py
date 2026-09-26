@@ -8,6 +8,7 @@ Lib.hello(); 1.1.0 and 1.2.0 renamed it, so the application no longer compiles a
 import datetime
 import json
 import os
+import re
 import pwd
 import shutil
 import subprocess
@@ -28,7 +29,7 @@ from tests.plan.test_analysis import assess_result
 
 pytestmark = pytest.mark.slow
 
-VERSIONS = ["1.0.0", "1.0.1", "1.0.2", "1.1.0", "1.2.0"]
+VERSIONS = ["1.0.0", "1.0.1", "1.0.2", "1.1.0", "1.2.0", "2.0.0"]
 WHEN = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
 
 
@@ -38,7 +39,7 @@ def real_home(monkeypatch):
 
 
 def lib_source(version: str) -> str:
-    method = "hello" if version.startswith("1.0") else "greet"
+    method = "hello" if version.startswith(("1.0", "2.")) else "greet"
     return f'package fx;\npublic class Lib {{ public static String {method}() {{ return "hi {version}"; }} }}\n'
 
 
@@ -297,3 +298,50 @@ def test_two_updates_that_only_clash_together_are_isolated_and_the_less_importan
     left = {e["coordinates"][0]: e["reason"] for e in result["left"]}
     assert "interacts with" in left["fx:b"] and "fx:a" in left["fx:b"]
     assert result["enforcer_clean"]
+
+
+def resolved_majors(state: Path) -> set[str]:
+    document = report(state)
+    return {d["version"].split(".")[0] for d in document["dependencies"] if d["coordinate"] == "fx:lib"}
+
+
+def test_a_major_only_fix_is_not_attempted_by_default_but_is_when_major_updates_are_allowed(scenario, capsys):
+    scenario[3].sources = sources_for(fixed="2.0.0")
+    assert plan(scenario) == ExitCode.NO_IMPROVEMENT
+    result = report(scenario[1])["result"]
+    (left,) = result["left"]
+    assert result["committed"] == [] and "major" in left["reason"] and result["builds"] == 0  # blocked before any build
+    assert resolved_majors(scenario[1]) == {"1"}
+    import shutil as sh
+
+    sh.rmtree(scenario[1] / "reports")
+    assert plan(scenario, "--major-updates", "allowed") == ExitCode.SUCCESS
+    allowed = report(scenario[1])["result"]
+    assert [c["label"] for c in allowed["committed"]] == ["fx:lib 1.0.0 → 2.0.0 (cve_major)"] and allowed["exposure_after"]["max_severity"] is None
+
+
+def only_versions_differ(before: str, after: str) -> bool:
+    """The POMs are identical once every <version> is masked: the plan changed versions and nothing else (spec 8.4)."""
+    mask = lambda text: re.sub(r"<version>[^<]*</version>", "<version/>", text)  # noqa: E731
+    return mask(before) == mask(after)
+
+
+def test_the_result_branch_only_touches_versions_and_pins(pair_scenario, capsys):
+    assert plan(pair_scenario, "--scope", "general") == ExitCode.SUCCESS
+    result = report(pair_scenario[1])["result"]
+    branch = result["branch"]
+    setup = git(pair_scenario[0], "log", "-1", "--format=%H", "--grep=^\\[giml-setup\\]", branch)  # tooling setup is its own commit (spec 3)
+    before, after = git(pair_scenario[0], "show", f"{setup}:pom.xml"), git(pair_scenario[0], "show", f"{branch}:pom.xml")
+    assert before != after and only_versions_differ(before, after)
+    assert git(pair_scenario[0], "diff", "--stat", setup, branch).count("|") == 1  # one file: pom.xml
+    assert git(pair_scenario[0], "log", "--format=%s", f"{setup}..{branch}").count("\n") + 1 == len(result["committed"])
+
+
+def test_the_naive_comparison_counts_what_bumping_everything_to_latest_touches_and_gets(scenario, capsys):
+    assert plan(scenario, "--compare-naive") == ExitCode.SUCCESS
+    comparison = report(scenario[1])["result"]["naive_comparison"]
+    naive, giml = comparison["naive"], comparison["giml"]
+    assert naive["touched"] == 2 and naive["passed"] == 1 and naive["failed"] == 1  # lib to 2.0.0 passes; other splits lib's versions
+    assert {b["to"]: b["failed_stage"] for b in naive["bumps"]} == {"2.0.0": None, "1.1.0": "enforcer"}
+    assert naive["cleared"] == ["GHSA-fx"] and giml["cleared"] == ["GHSA-fx"] and giml["touched"] == 1
+    assert "naive (each dependency to its newest, on its own): 2 touched, 1 passed" in capsys.readouterr().out

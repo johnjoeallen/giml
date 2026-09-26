@@ -27,7 +27,7 @@ from giml.plan.analysis import Analysis, MissingSnapshotError, Sources, analyse,
 from giml.plan.baseline_run import MAVEN_TIMEOUT_SECONDS, BaselineRun
 from giml.gate.assess import run_java
 from giml.git.runner import Git
-from giml.plan.naive import compare_naive
+from giml.plan.naive import compare_naive, naive_changes
 from giml.plan.api_diff import ApiChecker, JapicmpTools, project_sources
 from giml.plan.exposure import TreeExposure, resolve_exposure
 from giml.plan.execute import PlanOutcome, deferral_records, execute
@@ -123,10 +123,11 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
         api = JapicmpTools(state_dir / "tools", project_dir, maven, java or run_java, baseline_run.env, logs, MAVEN_TIMEOUT_SECONDS)
         checker = ApiChecker(project_sources(project_dir), api.jar, api.compare)
         base_commit = Git(ws.worktree).out("rev-parse", "HEAD")
+        naive_edits = naive_changes(first) if compare_naive_bumps else None  # read now: commits change the files they expect
         outcome = execute(ws.worktree, ws.run_id, tier.earned or "", first, reanalyse, trial, options, clock, project_dir / "pom.xml",
                           recorder, checker)  # fmt: skip
         if compare_naive_bumps:
-            naive_full = compare_naive(first, lambda edits: trial.verify(edits, pit=False, at=base_commit, judge_exposure=False))
+            naive_full = compare_naive(first, lambda edits: trial.verify(edits, pit=False, at=base_commit, judge_exposure=False), naive_edits)
         for record in deferral_records(outcome, ws.repo.project_key, ws.run_id, clock()):
             store.save_deferral(record)
     remaining = _final_violations(baseline_run, project_dir, bool(outcome and outcome.committed))

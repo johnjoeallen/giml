@@ -70,12 +70,16 @@ def naive_changes(analysis: Analysis) -> list[tuple[tuple[str, ...], str, str, l
     return sorted(found)
 
 
-def compare_naive(analysis: Analysis, verify: Callable[[list[SetVersion]], TrialResult]) -> NaiveComparison:
-    """Verify every naive bump on its own with ``verify`` (a trial from the baseline state)."""
+def compare_naive(analysis: Analysis, verify: Callable[[list[SetVersion]], TrialResult], changes=None) -> NaiveComparison:
+    """Verify every naive bump on its own with ``verify`` (a trial from the baseline state).
+
+    ``changes`` are ``naive_changes(analysis)`` taken before anything was committed: they hold the text each edit expects,
+    which is read from the files when they are made.
+    """
     before = {f.advisory_id for d in analysis.exposure.dependencies for f in d.findings}
     bumps: list[NaiveBump] = []
     cleared: set[str] = set()
-    for coordinates, current, newest, edits in naive_changes(analysis):
+    for coordinates, current, newest, edits in (naive_changes(analysis) if changes is None else changes):
         result = verify(edits)
         bumps.append(NaiveBump(coordinates, current, newest, result.passed, result.failed_stage, verdict_of(result).cost))
         if result.passed and result.exposure is not None:

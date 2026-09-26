@@ -40,3 +40,12 @@ def test_the_comparison_counts_touched_passed_builds_and_cleared_advisories(worl
     assert comparison.touched == 3 and comparison.passed == 2 and comparison.builds == 2  # the cached one cost nothing
     assert set(comparison.cleared) == {"CVE-lib", "GHSA-core", "GHSA-db", "GHSA-deep", "GHSA-major"}
     assert comparison.as_dict()["failed"] == 1 and comparison.as_dict()["bumps"][0]["failed_stage"] == "compile"
+
+
+def test_changes_taken_before_a_commit_are_used_as_given(world):
+    base = analysis(world)
+    taken = naive_changes(base)
+    (world[0]).write_text(world[0].read_text().replace("<version>1.0.0</version>", "<version>1.0.2</version>", 1))  # a step was committed since
+    seen = []
+    compare_naive(base, lambda edits: (seen.append(edits), passed())[1], taken)
+    assert any(edit.expected == "1.0.0" for edits in seen for edit in edits)  # not re-read from the modified file
