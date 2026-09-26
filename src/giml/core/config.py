@@ -347,8 +347,9 @@ class DatabaseSettings:
 class SmokeSettings:
     """The ``smoke`` section: how to boot the packaged application (spec 12.1). Data only, never a command."""
 
-    profile: str  # the application's own smoke profile (it decides what a smoke run configures, Flyway included)
-    artifact: str | None = None  # a path relative to the project, for example target/app.jar; default: the one executable jar
+    profile: str | None = None  # a Spring profile to activate (given to Spring Boot applications only); the profile decides what a smoke run configures
+    artifact: str | None = None  # a path or glob relative to the project, e.g. server/target/app-*.jar; default: the one executable jar in target/
+    properties: dict[str, str] | None = None  # system properties (-Dname=value) for the JVM; values may use the same placeholders as env
     env: dict[str, str] | None = None  # extra environment for the application; values may use ${PORT}, ${TRIAL_SCHEMA}, ${DB_*}
     ready: ReadySettings = ReadySettings()
     database: DatabaseSettings | None = None
@@ -443,38 +444,63 @@ def _parse_database(data: Any, where: str) -> DatabaseSettings:
     return dataclasses.replace(settings, schema_prefix=prefix)
 
 
+def _smoke_value(name: str, value: Any, where: str, allowed: frozenset[str]) -> str:
+    """A settings value as text: placeholders must be known, and a secret-looking name may not carry a literal value."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise ConfigError(f"{where}.{name}: expected a string, got {value!r}")
+    text = str(value)
+    unknown = sorted(set(PLACEHOLDER.findall(text)) - allowed)
+    if unknown:
+        raise ConfigError(f"{where}.{name}: unknown placeholder(s) ${{{'}, ${'.join(unknown)}}} "
+                          f"(known: {', '.join(sorted(allowed))}; the DB_* ones need a database section)")  # fmt: skip
+    if SECRET_NAME.search(name) and PLACEHOLDER.sub("", text).strip():
+        raise ConfigError(f"{where}.{name}: looks like a secret with a literal value; secrets come from the runner's own "
+                          "environment (use a ${DB_PASSWORD} placeholder or leave it out), never from the repository")  # fmt: skip
+    return text
+
+
+def _placeholders(database: bool) -> frozenset[str]:
+    return RUNTIME_PLACEHOLDERS | (DATABASE_PLACEHOLDERS if database else frozenset())
+
+
 def _parse_smoke_env(data: Any, where: str, database: bool) -> dict[str, str]:
     if not isinstance(data, dict):
         raise ConfigError(f"{where}: expected a mapping of environment variable names to values")
-    allowed = RUNTIME_PLACEHOLDERS | (DATABASE_PLACEHOLDERS if database else frozenset())
     env: dict[str, str] = {}
     for name, value in data.items():
         _env_name(name, f"{where} key {name!r}")
-        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-            raise ConfigError(f"{where}.{name}: expected a string, got {value!r}")
-        text = str(value)
-        unknown = sorted(set(PLACEHOLDER.findall(text)) - allowed)
-        if unknown:
-            raise ConfigError(f"{where}.{name}: unknown placeholder(s) ${{{'}, ${'.join(unknown)}}} "
-                              f"(known: {', '.join(sorted(allowed))}; the DB_* ones need a database section)")  # fmt: skip
-        if SECRET_NAME.search(name) and PLACEHOLDER.sub("", text).strip():
-            raise ConfigError(f"{where}.{name}: looks like a secret with a literal value; secrets come from the runner's own "
-                              "environment (use a ${DB_PASSWORD} placeholder or leave it out), never from the repository")  # fmt: skip
-        env[name] = text
+        env[name] = _smoke_value(name, value, where, _placeholders(database))
     return env
+
+
+PROPERTY_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*")
+
+
+def _parse_properties(data: Any, where: str, database: bool) -> dict[str, str]:
+    """System properties for the JVM: plain dotted names, values under the same rules as the environment's."""
+    if not isinstance(data, dict):
+        raise ConfigError(f"{where}: expected a mapping of system property names to values")
+    properties: dict[str, str] = {}
+    for name, value in data.items():
+        if not isinstance(name, str) or not PROPERTY_NAME.fullmatch(name):
+            raise ConfigError(f"{where}: {name!r} is not a system property name (letters, digits, . _ -)")
+        properties[name] = _smoke_value(name, value, where, _placeholders(database))
+    return properties
 
 
 def _parse_smoke(data: Any, where: str) -> SmokeSettings:
     _reject_commands(data, where)
     section = _Section(data, where)
-    profile, artifact = section.text("profile"), section.optional("artifact")
+    profile, artifact = section.optional("profile"), section.optional("artifact")
     env_data, ready_data, database_data = section.optional("env"), section.optional("ready"), section.optional("database")
+    properties_data = section.optional("properties")
     section.finish()
-    if not PROFILE_NAME.fullmatch(profile):
+    if profile is not None and (not isinstance(profile, str) or not PROFILE_NAME.fullmatch(profile)):
         raise ConfigError(f"{where}.profile: expected a profile name (letters, digits, - _ .), got {profile!r}")
     if artifact is not None and (not isinstance(artifact, str) or not artifact or artifact.startswith("/") or ".." in Path(artifact).parts):
         raise ConfigError(f"{where}.artifact: expected a path inside the project such as target/app.jar, got {artifact!r}")
     database = _parse_database(database_data, f"{where}.database") if database_data is not None else None
     env = _parse_smoke_env(env_data, f"{where}.env", database is not None) if env_data is not None else {}
+    properties = _parse_properties(properties_data, f"{where}.properties", database is not None) if properties_data is not None else {}
     ready = _parse_ready(ready_data, f"{where}.ready") if ready_data is not None else ReadySettings()
-    return SmokeSettings(profile, artifact, env, ready, database)
+    return SmokeSettings(profile, artifact, properties, env, ready, database)

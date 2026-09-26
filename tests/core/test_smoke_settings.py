@@ -52,7 +52,11 @@ def test_the_smallest_smoke_section_needs_only_the_profile(tmp_path):
 
 
 @pytest.mark.parametrize("text, message", [
-    ("smoke:\n  env: {A: b}\n", "profile: required key missing"),
+    ("smoke:\n  profile: 5\n", "expected a profile name"),
+    ("smoke:\n  properties:\n    'bad name': 1\n", "is not a system property name"),
+    ("smoke:\n  properties:\n    app.port: ${NOPE}\n", "unknown placeholder"),
+    ("smoke:\n  properties:\n    db.password: hunter2\n", "looks like a secret"),
+    ("smoke:\n  properties: [a]\n", "mapping of system property names"),
     ("smoke:\n  profile: 'bad profile'\n", "expected a profile name"),
     ("smoke:\n  profile: s\n  command: java -jar x\n", "settings are data only and never carry a command"),
     ("smoke:\n  profile: s\n  ready:\n    exec: curl x\n", "never carry a command"),
@@ -80,3 +84,10 @@ def test_invalid_smoke_settings_are_refused_with_the_reason(tmp_path, text, mess
 def test_a_placeholder_password_is_allowed_because_it_is_not_a_value(tmp_path):
     text = FULL.replace("SPRING_FLYWAY_SCHEMAS: ${TRIAL_SCHEMA}", "SPRING_FLYWAY_SCHEMAS: ${TRIAL_SCHEMA}\n    MY_SECRET: ${DB_PASSWORD}")
     assert load(tmp_path, text).smoke.env["MY_SECRET"] == "${DB_PASSWORD}"
+
+
+def test_a_non_spring_application_needs_no_profile_only_properties_and_a_health_path(tmp_path):
+    smoke = load(tmp_path, "smoke:\n  artifact: red-kite-server/target/red-kite-*.jar\n  properties:\n    redkite.port: ${PORT}\n"
+                           "  ready:\n    http: /health\n    contains: ok\n").smoke
+    assert smoke.profile is None and smoke.properties == {"redkite.port": "${PORT}"} and smoke.artifact == "red-kite-server/target/red-kite-*.jar"
+    assert smoke.ready == ReadySettings("/health", "ok", 60)

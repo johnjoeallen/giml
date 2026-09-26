@@ -22,10 +22,9 @@ import java.nio.file.*;
 
 public class Demo {
     public static void main(String[] args) throws Exception {
-        int port = 0;
-        for (String a : args) if (a.startsWith("--server.port=")) port = Integer.parseInt(a.substring(14));
+        int port = Integer.parseInt(System.getProperty("demo.port", "0"));
         String mode = System.getenv().getOrDefault("DEMO_MODE", "up");
-        System.out.println("args=" + String.join(" ", args));
+        System.out.println("args=" + String.join(" ", args) + " demo.port=" + port);
         System.out.println("secret-in-log=" + System.getenv().getOrDefault("DEMO_PASSWORD", "none"));
         System.out.println("developer-token=" + System.getenv("GITHUB_TOKEN"));
         String pidFile = System.getenv("DEMO_PIDFILE");
@@ -76,7 +75,7 @@ def alive(pid: int) -> bool:
 
 
 def run(tmp_path, project, env, timeout=20, **kw):
-    settings = SmokeSettings("smoke", env=env, ready=ReadySettings(http="/health", contains="UP", timeout_seconds=timeout))
+    settings = SmokeSettings("smoke", properties={"demo.port": "${PORT}"}, env=env, ready=ReadySettings(http="/health", contains="UP", timeout_seconds=timeout))
     environ = {"PATH": os.environ["PATH"], "GITHUB_TOKEN": "dev-secret-token", **kw.pop("environ", {})}
     return SmokeRunner(settings, environ, tmp_path / "logs", "demo-c282ac5d", "run-1", **kw).run(project)
 
@@ -85,7 +84,7 @@ def test_a_real_application_boots_answers_health_and_the_developers_token_stays_
     out = run(tmp_path, demo_jar, {"DEMO_MODE": "up"})
     log = out.log_path.read_text()
     assert out.passed, log
-    assert "--spring.profiles.active=smoke" in log and "--server.address=127.0.0.1" in log
+    assert "args= demo.port=" in log and "demo.port=0" not in log  # a plain jar gets no Spring arguments, and the port through a property
     assert "developer-token=null" in log and "dev-secret-token" not in log
 
 
@@ -118,7 +117,8 @@ def test_the_database_password_is_passed_to_the_application_and_removed_from_its
         def drop(self, schema): ...
 
     database = DatabaseSettings("H", "P", "D", "U", "W")
-    settings = SmokeSettings("smoke", env={"DEMO_PASSWORD": "${DB_PASSWORD}"}, ready=ReadySettings(http="/health", timeout_seconds=20), database=database)
+    settings = SmokeSettings("smoke", properties={"demo.port": "${PORT}"}, env={"DEMO_PASSWORD": "${DB_PASSWORD}"},
+                             ready=ReadySettings(http="/health", timeout_seconds=20), database=database)
     environ = {"PATH": os.environ["PATH"], "H": "127.0.0.1", "P": "5432", "D": "d", "U": "u", "W": "hunter2-pw"}
     out = SmokeRunner(settings, environ, tmp_path / "logs", "demo-c282ac5d", "run-1", lifecycle_factory=lambda c: NoopLifecycle()).run(demo_jar)
     log = out.log_path.read_text()

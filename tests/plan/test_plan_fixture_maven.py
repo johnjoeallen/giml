@@ -89,8 +89,7 @@ import java.net.InetSocketAddress;
 
 public class Main {
     public static void main(String[] args) throws Exception {
-        int port = 8080;
-        for (String a : args) if (a.startsWith("--server.port=")) port = Integer.parseInt(a.substring(14));
+        int port = Integer.parseInt(System.getProperty("fx.port", "8080"));
         String greeting = new App().run();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         server.createContext("/health", ex -> {
@@ -238,7 +237,7 @@ def make_scenario(tmp_path, pair, smoke=False):
     if smoke:
         pom = pom.replace("</project>", SHADE + "</project>")
         (project / ".giml").mkdir()
-        (project / ".giml" / "settings.yml").write_text("smoke:\n  profile: smoke\n  ready:\n    http: /health\n    contains: UP\n    timeout_seconds: 30\n")
+        (project / ".giml" / "settings.yml").write_text("smoke:\n  properties:\n    fx.port: ${PORT}\n  ready:\n    http: /health\n    contains: UP\n    timeout_seconds: 30\n")
         (project / "src" / "main" / "java" / "fx" / "Main.java").write_text(MAIN)
     (project / "pom.xml").write_text(pom)
     (project / "src" / "main" / "java" / "fx" / "App.java").write_text(

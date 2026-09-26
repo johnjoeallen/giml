@@ -81,12 +81,12 @@ def test_placeholders_are_filled_and_secrets_redacted():
 
 
 def test_a_ready_web_application_passes_and_is_started_the_documented_way(tmp_path):
-    jar(tmp_path)
+    spring = spring_jar(tmp_path)
     launcher = Launcher(output="2026 WARN slow thing\nStarted App in 1.2 seconds\n")
     out = runner(tmp_path, launcher, http_get=lambda url, timeout: (200, '{"status":"UP"}')).run(tmp_path)
     (argv, cwd, env), = launcher.calls
     assert out.passed and out.failure is None and out.stage == "startup"
-    assert argv[1:3] == ["-jar", str(tmp_path / "target" / "app.jar")] and "--spring.profiles.active=smoke" in argv
+    assert argv[1:3] == ["-jar", str(spring)] and "--spring.profiles.active=smoke" in argv
     assert "--server.address=127.0.0.1" in argv and any(a.startswith("--server.port=") for a in argv)
     assert out.details == {"log_problems": ["2026 WARN slow thing"]}
 
@@ -197,3 +197,37 @@ def test_startup_classification_reads_the_logs_own_key_lines():
     assert failure.failure_class == "startup" and failure.key_lines[0] == "did not start" and len(failure.signature) == 16
     same = classify_startup("other noise\nCaused by: java.lang.IllegalStateException: x at 09:15:59\n", "did not start")
     assert same.signature == failure.signature  # times and noise do not change the signature
+
+
+def spring_jar(tmp_path):
+    path = tmp_path / "target" / "boot.jar"
+    path.parent.mkdir(exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\nMain-Class: org.springframework.boot.loader.JarLauncher\nSpring-Boot-Version: 3.5.0\n")
+    return path
+
+
+def test_only_a_spring_boot_jar_is_given_spring_arguments_and_properties_become_dash_d_options(tmp_path):
+    jar(tmp_path, "plain.jar")
+    settings = SmokeSettings(None, properties={"app.port": "${PORT}", "app.mode": "smoke"}, ready=ReadySettings(http="/health", timeout_seconds=1))
+    launcher = Launcher()
+    runner(tmp_path, launcher, settings, http_get=lambda u, t: (200, "ok")).run(tmp_path)
+    argv = launcher.calls[0][0]
+    port = next(a.split("=")[1] for a in argv if a.startswith("-Dapp.port="))
+    assert argv[1:3] == [f"-Dapp.port={port}", "-Dapp.mode=smoke"] and argv[3] == "-jar" and port.isdigit()
+    assert not any(a.startswith("--") for a in argv)  # a plain jar is not handed Spring's arguments
+    (tmp_path / "target" / "plain.jar").unlink()
+    spring = spring_jar(tmp_path)
+    launcher = Launcher()
+    runner(tmp_path, launcher, SmokeSettings("smoke", ready=ReadySettings(http="/health", timeout_seconds=1)), http_get=lambda u, t: (200, "ok")).run(tmp_path)
+    argv = launcher.calls[0][0]
+    assert argv[1:3] == ["-jar", str(spring)] and "--spring.profiles.active=smoke" in argv and "--server.address=127.0.0.1" in argv
+
+
+def test_a_glob_selects_the_artifact_only_when_it_matches_exactly_one_file(tmp_path):
+    module = tmp_path / "server" / "target"
+    module.mkdir(parents=True)
+    (module / "app-1.0.jar").write_bytes(b"x")
+    assert find_artifact(tmp_path, "server/target/app-*.jar") == module / "app-1.0.jar"
+    (module / "app-2.0.jar").write_bytes(b"x")
+    assert find_artifact(tmp_path, "server/target/app-*.jar") is None and find_artifact(tmp_path, "server/target/none-*.jar") is None

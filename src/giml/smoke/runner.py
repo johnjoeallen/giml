@@ -59,14 +59,25 @@ def free_port() -> int:
 
 
 def find_artifact(project_dir: Path, configured: str | None) -> Path | None:
-    """The configured jar, or the single executable jar in target/ (one with a Main-Class; sources, tests and originals skipped)."""
+    """The configured jar (a path or a glob that matches exactly one file), or the single executable jar in target/
+    (one with a Main-Class; sources, tests and originals skipped)."""
     if configured is not None:
-        found = project_dir / configured
-        return found if found.is_file() else None
+        matches = [p for p in sorted(project_dir.glob(configured)) if p.is_file()]
+        return matches[0] if len(matches) == 1 else None
     candidates = [p for p in sorted((project_dir / "target").glob("*.jar"))
                   if not p.name.endswith(("-sources.jar", "-tests.jar", "-javadoc.jar")) and not p.name.startswith("original-")]  # fmt: skip
     runnable = [p for p in candidates if _has_main_class(p)]
     return runnable[0] if len(runnable) == 1 else None
+
+
+def is_spring_boot(jar: Path) -> bool:
+    """A Spring Boot jar carries Spring-Boot-Version or Start-Class in its manifest; only such an application is given Spring arguments."""
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            manifest = archive.read("META-INF/MANIFEST.MF")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return False
+    return b"Spring-Boot-Version" in manifest or b"Start-Class" in manifest
 
 
 def _has_main_class(jar: Path) -> bool:
@@ -171,8 +182,11 @@ class SmokeRunner:
                 env = {k: v for k, v in self.environ.items() if k in _KEPT_ENV} | {"HOME": scratch}
                 env |= resolve_placeholders(self.settings.env or {}, values)
                 java = shutil.which("java", path=env.get("PATH", os.defpath)) or "java"
-                argv = [java, "-jar", str(artifact), f"--spring.profiles.active={self.settings.profile}", f"--server.port={port}",
-                        "--server.address=127.0.0.1"]  # fmt: skip
+                properties = [f"-D{name}={value}" for name, value in resolve_placeholders(self.settings.properties or {}, values).items()]
+                argv = [java, *properties, "-jar", str(artifact)]
+                if is_spring_boot(artifact):  # Spring's own conventions; any other application is configured through properties and env
+                    argv += ([f"--spring.profiles.active={self.settings.profile}"] if self.settings.profile else [])
+                    argv += [f"--server.port={port}", "--server.address=127.0.0.1"]
                 process = self.launch(argv, Path(scratch), env, log)
                 with _kill_tree(process):
                     ready, why = self._await_ready(process, port, log, secrets)
