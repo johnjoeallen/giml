@@ -29,7 +29,7 @@ from giml.maven.build import StageOutcome
 from giml.maven.failures import INFRASTRUCTURE, TIMEOUT, UNAVAILABLE, Failure
 from giml.store.result_cache import canonical_json
 
-SCHEMA = 3  # 3: the pit stage's Maven arguments changed
+SCHEMA = 4  # 4: the startup stage runs with its own user.home; 3: the pit stage arguments changed
 _NOT_CACHED = (INFRASTRUCTURE, TIMEOUT, UNAVAILABLE)
 _MAVEN_VERSION = re.compile(r"Apache Maven (\S+)")
 
