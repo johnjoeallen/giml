@@ -319,7 +319,7 @@ Persisted and printed as JSON:
   "untested_modules": [],
   "excluded_share": 6,
   "excluded": {"jacoco_classes": ["..."], "pit_excluded_classes": ["..."]},
-  "startup_check": "not_configured|configured|verified|baseline_failed",
+  "startup_check": "not_configured|verified|baseline_failed|unavailable",
   "enforcer": {"status": "passed|baseline_failed", "failed_rules": [], "log": "..."},
   "tooling_added": ["..."],
   "tooling_kept": ["..."],

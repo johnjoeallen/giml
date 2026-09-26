@@ -18,6 +18,9 @@ from pathlib import Path
 
 from giml import workspace
 from giml.core.config import GateConfig, load_project_settings
+from giml.maven.build import STAGES
+from giml.maven.failures import UNAVAILABLE
+from giml.smoke.runner import SmokeRunner
 from giml.core.model import GateResultRecord, ProjectRecord, RunRecord
 from giml.gate.modules import ModuleFacts, declares_failsafe, module_facts
 from giml.gate.reports import Mutations, ReportError, flaky_tests, read_jacoco, read_pit, read_surefire
@@ -132,8 +135,17 @@ def _enforcer(session: _Session) -> dict:
     return {"status": "baseline_failed", "failed_rules": rules, "log": str(result.log_path)}
 
 
-def _startup_check(project_dir: Path) -> str:
-    return "configured" if load_project_settings(project_dir).smoke is not None else "not_configured"  # verified from M6
+def _startup_check(session: _Session, project_key: str, run_id: str, environ: Mapping[str, str]) -> str:
+    """not_configured, verified (the packaged application boots at the base), baseline_failed, or unavailable (no database here)."""
+    smoke = load_project_settings(session.project_dir).smoke
+    if smoke is None:
+        return "not_configured"
+    if not session.mvn("package", list(STAGES["package"])).succeeded:
+        return "baseline_failed"
+    outcome = SmokeRunner(smoke, {**environ, **(session.env or {})}, session.logs, project_key, run_id).run(session.project_dir)
+    if outcome.passed:
+        return "verified"
+    return "unavailable" if outcome.failure_class == UNAVAILABLE else "baseline_failed"
 
 
 def assess(
@@ -260,7 +272,7 @@ def _measure(repo: RepoState, reactor: list[Path], worktree: Path, state_dir: Pa
         "excluded_share": round(metrics.excluded_share, 2),
         "excluded": {"jacoco_classes": coverage_info.get("excluded", []),
                      "pit_excluded_classes": _pit_excludes(worktree_reactor)},  # fmt: skip
-        "startup_check": _startup_check(project_dir),
+        "startup_check": _startup_check(session, repo.project_key, run_id, environ),
         "enforcer": _enforcer(session),
         "tooling_added": setup.added,
         "tooling_kept": setup.kept,
