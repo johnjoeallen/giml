@@ -81,14 +81,19 @@ def verdict_of(result: TrialResult, required: frozenset[str] = frozenset()) -> V
     """
     missing = sorted(required - {v.identity for v in result.resolved_violations}) if result.passed else []
     if missing:
-        return Verdict(False, False, f"did not resolve {', '.join(missing)}", 0 if result.cache_hits == len(result.outcomes) else 1)
+        return Verdict(False, False, f"did not resolve {', '.join(missing)}", _cost(result))
     if result.passed or result.failure is None:
         reason = "passed" if result.passed else "did not pass"
     else:
         detail = f": {result.failure.key_lines[0]}" if result.failure.key_lines else ""
         reason = f"{result.failed_stage} {result.failure.failure_class}{detail}"
-    cost = 0 if result.failed_stage == "exposure" or (result.outcomes and result.cache_hits == len(result.outcomes)) else 1
-    return Verdict(result.passed, result.inconclusive, reason, cost)
+    return Verdict(result.passed, result.inconclusive, reason, _cost(result))
+
+
+def _cost(result: TrialResult) -> int:
+    """Builds a trial took: none when it stopped at the vulnerability check or every build stage came from the cache."""
+    builds = [o for o in result.outcomes if o.stage != "exposure"]
+    return 0 if not builds or all(o.cache_hit for o in builds) else 1
 
 
 def _changes_of(proposals: Mapping[str, Proposal], chosen: Mapping[str, Step]) -> list[Change]:

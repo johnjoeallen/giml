@@ -235,3 +235,11 @@ def test_every_trial_is_reported_to_the_recorder_with_what_it_applied(repo, worl
     lib = [entry for entry, _ in seen if len(entry) == 1 and entry[0]["key"] == "dep:o:lib@1.0.0"]
     assert {(e[0]["from"], e[0]["to"]) for e in lib} == {("1.0.0", "1.0.2"), ("1.0.0", "1.1.0")}
     assert any(passed is False for _, passed in seen) and lib[0][0]["members"] == ["o:lib"]
+
+
+def test_a_trial_whose_builds_all_came_from_the_cache_costs_nothing_even_after_the_vulnerability_check():
+    exposure = StageOutcome("exposure", True, 0.3, Path("/dev/null"), None)
+    cached = StageOutcome("compile", True, 1.0, Path("log"), None, cache_hit=True)
+    fresh = StageOutcome("unit_test", True, 1.0, Path("log"), None)
+    assert verdict_of(TrialResult(True, False, None, None, (exposure, cached), (), ())).cost == 0
+    assert verdict_of(TrialResult(True, False, None, None, (exposure, cached, fresh), (), ())).cost == 1
