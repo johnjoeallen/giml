@@ -19,6 +19,9 @@ ENFORCER_CONVERGENCE = "enforcer_convergence"
 DUPLICATE_CLASSES = "duplicate_classes"
 UNIT_TEST = "unit_test"
 INTEGRATION_TEST = "integration_test"
+STARTUP = "startup"  # the packaged application did not boot or did not become ready
+MIGRATION = "migration"  # Flyway or Liquibase failed while it booted
+UNAVAILABLE = "unavailable"  # the check could not be run (no database, no psql): not the candidate's fault
 MUTATION_DROPPED = "mutation_score_dropped"  # PIT ran but the candidate's scores fell below the floor
 TIMEOUT = "timeout"
 INFRASTRUCTURE = "infrastructure"  # not the candidate's fault: retry or ignore
@@ -52,6 +55,7 @@ _BOILERPLATE = re.compile(
 )  # fmt: skip
 
 _ABSOLUTE_PATH = re.compile(r"(?<![\w:/.])/(?:[\w.\-$@+]+/)*[\w.\-$@+]*")
+_TIME_OF_DAY = re.compile(r"\b\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\b")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?")
 _DURATION = re.compile(r"(?<![\w.\-])\d+(?:\.\d+)?\s?(?:ms|s|min)\b")
 _SOURCE_POSITION = re.compile(r":\[\d+,\d+\]")
@@ -87,6 +91,7 @@ def normalise(line: str) -> str:
     line = _ON_PROJECT.sub("on project <p>:", line)
     line = _FOR_PROJECT.sub("for project <p>", line)
     line = _TIMESTAMP.sub("<ts>", line)
+    line = _TIME_OF_DAY.sub("<ts>", line)
     line = _ABSOLUTE_PATH.sub(_path, line)
     line = _SOURCE_POSITION.sub(":[<n>,<n>]", line)
     line = _LINE_REFERENCE.sub(r"\1:<n>", line)
@@ -137,6 +142,13 @@ def _class_of(log_text: str) -> str:
         if pattern.search(log_text):
             return failure_class
     return UNKNOWN
+
+
+def failure_from_lines(failure_class: str, lines: list[str]) -> Failure:
+    """A failure built from key lines that do not come from a Maven log (the startup check's), normalised and hashed alike."""
+    normalised = tuple(dict.fromkeys(normalise(line)[:MAX_LINE_LENGTH] for line in lines if line.strip()))[:MAX_KEY_LINES]
+    digest = hashlib.sha256("\n".join((failure_class, *normalised)).encode("utf-8")).hexdigest()
+    return Failure(failure_class, digest[:16], normalised)
 
 
 def classify(log_text: str, timed_out: bool = False) -> Failure:

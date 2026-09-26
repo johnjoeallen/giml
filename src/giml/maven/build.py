@@ -16,7 +16,7 @@ from typing import Any
 from giml.gate.modules import module_facts
 from giml.gate.reports import read_pit
 from giml.maven.enforcer import Violation, parse_enforcer
-from giml.maven.failures import INFRASTRUCTURE, Failure, classify
+from giml.maven.failures import INFRASTRUCTURE, UNAVAILABLE, Failure, classify
 from giml.maven.project import discover_reactor
 from giml.maven.runner import Env, MavenRunner
 
@@ -66,7 +66,7 @@ class StageOutcome:
     @property
     def retryable(self) -> bool:
         """An infrastructure failure is not the candidate's fault: try again or ignore it (spec 9)."""
-        return self.failure_class == INFRASTRUCTURE
+        return self.failure_class in (INFRASTRUCTURE, UNAVAILABLE)
 
 
 def pit_mutations(project: Path) -> dict[str, int]:
