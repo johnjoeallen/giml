@@ -26,11 +26,11 @@ from giml.core.interfaces import BuildRunner, ResultCache
 from giml.gate.setup import tooling
 from giml.git.runner import Git
 from giml.maven.build import StageOutcome
-from giml.maven.failures import INFRASTRUCTURE, TIMEOUT, Failure
+from giml.maven.failures import INFRASTRUCTURE, TIMEOUT, UNAVAILABLE, Failure
 from giml.store.result_cache import canonical_json
 
 SCHEMA = 3  # 3: the pit stage's Maven arguments changed
-_NOT_CACHED = (INFRASTRUCTURE, TIMEOUT)
+_NOT_CACHED = (INFRASTRUCTURE, TIMEOUT, UNAVAILABLE)
 _MAVEN_VERSION = re.compile(r"Apache Maven (\S+)")
 
 

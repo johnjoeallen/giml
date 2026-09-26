@@ -34,6 +34,7 @@ STAGES: dict[str, tuple[str, ...]] = {
     # A mutant that loops forever waits timeoutFactor x its test time + timeoutConstant before PIT gives up on it, and that
     # wait dominates a run on projects with many such mutants (PIT's default constant is 4000 ms). A timed-out mutant counts
     # as detected either way; the baseline is measured with the same values, so the floors stay comparable.
+    "package": ("package", "-DskipTests", "-Denforcer.skip=true"),  # the artifact the startup stage boots
     "pit": ("test-compile", "org.pitest:pitest-maven:mutationCoverage", "-Denforcer.skip=true", "-DtimestampedReports=false",
             f"-DtimeoutConstant={PIT_TIMEOUT_CONSTANT_MS}", "-DtimeoutFactor=1.25"),
 }

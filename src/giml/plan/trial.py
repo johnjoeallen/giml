@@ -34,7 +34,7 @@ from giml.maven.tree import ResolutionError
 from giml.plan.baseline import Baseline
 from giml.plan.exposure import TreeExposure, worse_exposure
 
-TRIAL_ORDER = ("compile", "enforcer", "unit_test", "integration", "pit")  # cheap and decisive first; PIT is the slowest
+TRIAL_ORDER = ("compile", "enforcer", "unit_test", "integration", "startup", "pit")  # cheap and decisive first; PIT is the slowest
 _CONVERGENCE_RULES = frozenset({"DependencyConvergence", "BanDuplicatePomDependencyVersions"})
 _MAX_LINES = 8
 

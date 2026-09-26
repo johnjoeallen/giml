@@ -22,10 +22,11 @@ from typing import Any
 from giml.core.interfaces import BuildRunner
 from giml.maven.build import StageOutcome
 from giml.maven.enforcer import Violation
+from giml.maven.failures import INFRASTRUCTURE, UNAVAILABLE
 
 STAGE_ORDER = ("compile", "unit_test", "enforcer")
 
-PASSED, BASELINE_FAILED, NOT_RUN = "passed", "baseline_failed", "not_run"
+PASSED, BASELINE_FAILED, NOT_RUN, UNAVAILABLE = "passed", "baseline_failed", "not_run", "unavailable"
 
 STOP_BASELINE_FAILED = "baseline_failed"
 STOP_REWIND_BASELINE_FAILED = "rewind_baseline_failed"
@@ -125,9 +126,12 @@ def verify_baseline(runner: BuildRunner, worktree, timeout_seconds: int, rewound
             stages.append(StageBaseline(stage, NOT_RUN, 0, None))
             continue
         outcome, attempts = _run(runner, worktree, stage, timeout_seconds, retries)
+        if outcome.failure_class == UNAVAILABLE:  # a check that cannot be run here (no database): not an oracle, not a failure
+            stages.append(StageBaseline(stage, UNAVAILABLE, attempts, outcome))
+            continue
         if outcome.passed:
             stages.append(StageBaseline(stage, PASSED, attempts, outcome))
             continue
         stages.append(StageBaseline(stage, BASELINE_FAILED, attempts, outcome))
-        stop = "infrastructure" if outcome.retryable else _HARD_STOP.get(stage)
+        stop = "infrastructure" if outcome.failure_class == INFRASTRUCTURE else _HARD_STOP.get(stage)
     return Baseline(tuple(stages), stop, rewound)

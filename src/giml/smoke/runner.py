@@ -116,7 +116,7 @@ class SmokeRunner:
                  http_get=None) -> None:  # fmt: skip
         self.settings, self.environ, self.logs_dir = settings, environ, logs_dir
         self.project_key, self.run_id, self.launch, self.sleep = project_key, run_id, launch, sleep
-        self._lifecycle_factory = lifecycle_factory or (lambda connection: SchemaLifecycle(settings.database, connection, environ))
+        self.lifecycle = lifecycle_factory or (lambda connection: SchemaLifecycle(settings.database, connection, environ))
         self._http_get = http_get or self._get
         self._runs = 0
 
@@ -149,7 +149,7 @@ class SmokeRunner:
         try:
             if self.settings.database is not None:
                 connection = read_connection(self.settings.database, self.environ)
-                lifecycle = self._lifecycle_factory(connection)
+                lifecycle = self.lifecycle(connection)
                 lifecycle.create(schema)
             return self._boot(artifact, worktree, log, started, connection, schema)
         except Unavailable as exc:

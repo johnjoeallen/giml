@@ -47,3 +47,23 @@ def test_the_floor_is_the_tier_threshold_or_the_baseline_when_lower():
     assert pit_floors(baseline(KILLED=95, SURVIVED=5), tier) == (tier.pit_mutation_coverage, tier.pit_test_strength)
     assert pit_floors(baseline(KILLED=70, SURVIVED=30), tier) == (70.0, 70.0)
     assert pit_floors(Baseline((), None, False), tier) is None and pit_floors(baseline(KILLED=1), None) is None
+
+
+def test_a_configured_smoke_profile_adds_the_startup_stage_before_pit(tmp_path):
+    config = load_gate_config(default_gate_config_path())
+    root = project(tmp_path)
+    (root / ".giml").mkdir()
+    (root / ".giml" / "settings.yml").write_text("smoke:\n  profile: smoke\n")
+    assert verification_stages(config, root, has_tier=True) == ["compile", "unit_test", "enforcer", "startup", "pit"]
+    assert verification_stages(config, root, has_tier=False)[-1] == "startup"
+
+
+def test_the_startup_check_can_be_switched_off(tmp_path):
+    import dataclasses
+
+    config = load_gate_config(default_gate_config_path())
+    off = dataclasses.replace(config, verification=dataclasses.replace(config.verification, startup_check="off"))
+    root = project(tmp_path)
+    (root / ".giml").mkdir()
+    (root / ".giml" / "settings.yml").write_text("smoke:\n  profile: smoke\n")
+    assert "startup" not in verification_stages(off, root, has_tier=True)

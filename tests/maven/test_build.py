@@ -36,7 +36,7 @@ def runner(tmp_path, *replies, env=None):
 
 
 def test_the_stages_map_to_maven_goals(tmp_path):
-    assert set(STAGES) == {"compile", "unit_test", "enforcer", "integration", "pit"}
+    assert set(STAGES) == {"compile", "unit_test", "enforcer", "integration", "package", "pit"}
     run, maven = runner(tmp_path)
     for stage in ("compile", "unit_test", "enforcer"):
         assert run.run_stage(tmp_path / "wt", stage, 60).passed
@@ -134,6 +134,6 @@ def test_every_stage_run_has_its_own_numbered_log(tmp_path):
 
 def test_an_unknown_stage_is_refused(tmp_path):
     run, maven = runner(tmp_path)
-    with pytest.raises(ValueError, match="unknown stage 'startup'; known: compile, enforcer, integration, pit, unit_test"):
+    with pytest.raises(ValueError, match="unknown stage 'startup'; known: compile, enforcer, integration, package, pit, unit_test"):
         run.run_stage(tmp_path / "wt", "startup", 60)
     assert maven.calls == []

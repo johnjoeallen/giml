@@ -22,6 +22,9 @@ from giml.maven.isolation import RunTemp, isolated_env
 from giml.maven.jdk import Jdk, JdkCatalog, resolve_jdk
 from giml.maven.project import discover_reactor
 from giml.maven.runner import MavenRunner
+from giml.smoke.postgres import Unavailable, read_connection
+from giml.smoke.runner import SmokeRunner
+from giml.smoke.stage import StartupAwareRunner
 from giml.plan.baseline import STAGE_ORDER, Baseline, verify_baseline
 from giml.plan.outcome_log import RewindFacts, log_baseline, oracle_strength
 from giml.store.result_cache import FileResultCache
@@ -52,9 +55,26 @@ def verification_stages(config: GateConfig, project_dir: Path, has_tier: bool) -
     if config.verification.integration_tests == "when_present" and (
             sum(module_facts(pom).integration_tests for pom in reactor) or declares_failsafe(reactor)):  # fmt: skip
         stages.append("integration")
+    if config.verification.startup_check == "when_configured" and load_project_settings(project_dir).smoke is not None:
+        stages.append("startup")
     if config.verification.pit == "always" and has_tier:
         stages.append("pit")
     return stages
+
+
+def sweep_leftover_schemas(smoke, smoke_runner, project_key: str, logs: Path) -> None:
+    """Drop this project's schemas that crashed runs left behind; a database that cannot be reached is noted, not fatal."""
+    if smoke is None or smoke.database is None or smoke_runner is None:
+        return
+    try:
+        lifecycle = smoke_runner.lifecycle(read_connection(smoke.database, smoke_runner.environ))
+        dropped = lifecycle.sweep(project_key)
+        note = f"swept {len(dropped)} leftover schema(s): {', '.join(dropped)}" if dropped else "no leftover schemas"
+    except Unavailable as exc:
+        note = f"could not sweep leftover schemas: {exc}"
+    logs.mkdir(parents=True, exist_ok=True)
+    with (logs / "smoke-sweep.log").open("a", encoding="utf-8") as handle:
+        handle.write(note + "\n")
 
 
 def run_baseline(
@@ -75,7 +95,10 @@ def run_baseline(
     env = isolated_env(jdk.build_env(env_in), env_in, temp)
     build_environment = BuildEnvironment(jdk.version, maven_version(env), tooling_fingerprint(), config.version)
     logs = state_dir / "runs" / ws.run_id / "logs"
-    runner = CachingBuildRunner(MavenBuildRunner(maven, env, logs), FileResultCache(state_dir / "cache"),
+    smoke = load_project_settings(project_dir).smoke
+    smoke_runner = SmokeRunner(smoke, env, logs, ws.repo.project_key, ws.run_id) if smoke is not None else None
+    sweep_leftover_schemas(smoke, smoke_runner, ws.repo.project_key, logs)
+    runner = CachingBuildRunner(StartupAwareRunner(MavenBuildRunner(maven, env, logs), smoke_runner), FileResultCache(state_dir / "cache"),
                                 lambda worktree, stage: stage_key_parts(worktree, stage, build_environment), logs)  # fmt: skip
     record = store.latest_gate_result(ws.repo.project_key)
     baseline = verify_baseline(runner, project_dir, timeout_seconds, rewound=ws.rewind is not None,
