@@ -27,6 +27,11 @@ public class Demo {
         System.out.println("args=" + String.join(" ", args) + " demo.port=" + port);
         System.out.println("secret-in-log=" + System.getenv().getOrDefault("DEMO_PASSWORD", "none"));
         System.out.println("developer-token=" + System.getenv("GITHUB_TOKEN"));
+        System.out.println("user.home=" + System.getProperty("user.home"));
+        if (mode.equals("write-home")) {
+            Files.createDirectories(Path.of(System.getProperty("user.home"), ".giml-demo"));
+            Files.writeString(Path.of(System.getProperty("user.home"), ".giml-demo", "state.db"), "written by the application under test");
+        }
         String pidFile = System.getenv("DEMO_PIDFILE");
         if (pidFile != null) {
             Process child = new ProcessBuilder("sleep", "300").start();  // a grandchild the runner must also kill
@@ -123,3 +128,14 @@ def test_the_database_password_is_passed_to_the_application_and_removed_from_its
     out = SmokeRunner(settings, environ, tmp_path / "logs", "demo-c282ac5d", "run-1", lifecycle_factory=lambda c: NoopLifecycle()).run(demo_jar)
     log = out.log_path.read_text()
     assert out.passed and "hunter2-pw" not in log and "secret-in-log=***" in log
+
+
+def test_an_application_that_writes_to_its_home_writes_to_the_ephemeral_one_never_the_developers(tmp_path, demo_jar):
+    real_home = Path(os.path.expanduser("~"))
+    marker = real_home / ".giml-demo"
+    assert not marker.exists()
+    out = run(tmp_path, demo_jar, {"DEMO_MODE": "write-home"})
+    log = out.log_path.read_text()
+    assert out.passed, log
+    assert "user.home=" + str(real_home) not in log and "user.home=/" in log
+    assert not marker.exists()  # the developer's home was not touched

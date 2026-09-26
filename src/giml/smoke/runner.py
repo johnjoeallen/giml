@@ -183,7 +183,9 @@ class SmokeRunner:
                 env |= resolve_placeholders(self.settings.env or {}, values)
                 java = shutil.which("java", path=env.get("PATH", os.defpath)) or "java"
                 properties = [f"-D{name}={value}" for name, value in resolve_placeholders(self.settings.properties or {}, values).items()]
-                argv = [java, *properties, "-jar", str(artifact)]
+                # A JVM takes user.home from the password database, not from $HOME, so without this the application under test
+                # would read and write the developer's real home (found on redkite, which opened its real ~/.redkite database).
+                argv = [java, f"-Duser.home={scratch}", *properties, "-jar", str(artifact)]
                 if is_spring_boot(artifact):  # Spring's own conventions; any other application is configured through properties and env
                     argv += ([f"--spring.profiles.active={self.settings.profile}"] if self.settings.profile else [])
                     argv += [f"--server.port={port}", "--server.address=127.0.0.1"]
