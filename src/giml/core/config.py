@@ -131,6 +131,8 @@ class _Section:
 
     def choice(self, key: str, allowed: tuple[str, ...]) -> str:
         value = self._get(key)
+        if value is False and "off" in allowed:  # YAML reads an unquoted `off` as a boolean
+            value = "off"
         if value not in allowed:
             raise ConfigError(f"{self.path}.{key}: expected one of {', '.join(allowed)}, got {value!r}")
         return value

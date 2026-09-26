@@ -363,3 +363,11 @@ def test_the_retired_objective_profile_key_is_rejected():
     data["planning"]["objective_profile"] = "conservative_patch"
     with pytest.raises(ConfigError, match=r"planning: unknown key\(s\): objective_profile"):
         parse(data)
+
+
+def test_an_unquoted_off_is_accepted_although_yaml_reads_it_as_false():
+    import yaml
+
+    data = yaml.safe_load(yaml.safe_dump(default_data()).replace("pit: always", "pit: off"))
+    assert data["verification"]["pit"] is False
+    assert parse(data).verification.pit == "off"
