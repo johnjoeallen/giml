@@ -26,6 +26,8 @@ from giml.maven.tree import resolve_reactor
 from giml.plan.analysis import Analysis, MissingSnapshotError, Sources, analyse, newest_release, tier_status
 from giml.plan.baseline_run import MAVEN_TIMEOUT_SECONDS, BaselineRun
 from giml.gate.assess import run_java
+from giml.git.runner import Git
+from giml.plan.naive import compare_naive
 from giml.plan.api_diff import ApiChecker, JapicmpTools, project_sources
 from giml.plan.exposure import TreeExposure, resolve_exposure
 from giml.plan.execute import PlanOutcome, deferral_records, execute
@@ -77,7 +79,8 @@ def _final_violations(baseline_run: BaselineRun, project_dir: Path, committed: b
 
 
 def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, store, config: GateConfig, options: PlanningSettings,
-                 maven: MavenRunner, sources: Sources, clock: Callable[[], datetime.datetime], java=None) -> PlanRun:  # fmt: skip
+                 maven: MavenRunner, sources: Sources, clock: Callable[[], datetime.datetime], java=None,
+                 compare_naive_bumps: bool = False) -> PlanRun:  # fmt: skip
     now = clock()
     osv_snapshot, central_snapshot = store.latest_snapshot(osv.SOURCE), store.latest_snapshot(central.SOURCE)
     if osv_snapshot is None:
@@ -105,7 +108,7 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
                 advisories.close()
 
     first = reanalyse("01-tree.log", tier.usable)
-    outcome, knowledge = None, []
+    outcome, knowledge, naive_full = None, [], None
     if tier.usable:
         trial = TrialRunner(WorktreeManager(ws.repo, state_dir, ws.run_id), ws.worktree, ws.repo.subdir or "", baseline_run.runner,
                             baseline_run.baseline, MAVEN_TIMEOUT_SECONDS, resolve_exposure=trial_exposure)  # fmt: skip
@@ -119,8 +122,11 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
 
         api = JapicmpTools(state_dir / "tools", project_dir, maven, java or run_java, baseline_run.env, logs, MAVEN_TIMEOUT_SECONDS)
         checker = ApiChecker(project_sources(project_dir), api.jar, api.compare)
+        base_commit = Git(ws.worktree).out("rev-parse", "HEAD")
         outcome = execute(ws.worktree, ws.run_id, tier.earned or "", first, reanalyse, trial, options, clock, project_dir / "pom.xml",
                           recorder, checker)  # fmt: skip
+        if compare_naive_bumps:
+            naive_full = compare_naive(first, lambda edits: trial.verify(edits, pit=False, at=base_commit, judge_exposure=False))
         for record in deferral_records(outcome, ws.repo.project_key, ws.run_id, clock()):
             store.save_deferral(record)
     remaining = _final_violations(baseline_run, project_dir, bool(outcome and outcome.committed))
@@ -134,6 +140,8 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
     report["kind"] = "plan"
     report["result"] = result_section(ws, outcome, remaining)
     report["result"]["failed_transitions"] = knowledge
+    if naive_full is not None and outcome is not None:
+        report["result"]["naive_comparison"] = {"naive": naive_full.as_dict(), "giml": giml_figures(first, outcome)}
     if ws.rewind is not None and outcome is not None and outcome.final is not None:
         report["rewind_comparison"] = compare_states(first.exposure, outcome.final, base_exposure(ws, state_dir, trial_exposure))
     directory = state_dir / "reports" / ws.run_id
@@ -141,6 +149,13 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     markdown_path.write_text(render_plan_markdown(report), encoding="utf-8")
     return PlanRun(outcome, remaining, report, json_path, markdown_path, STOP_PLANNED if outcome else STOP_NO_TIER)
+
+
+def giml_figures(first: Analysis, outcome: PlanOutcome) -> dict:
+    """The same measures for giml's own result: dependencies touched, builds spent, advisories cleared."""
+    before = {f.advisory_id for d in first.exposure.dependencies for f in d.findings}
+    after = {f.advisory_id for d in (outcome.final.dependencies if outcome.final else ()) for f in d.findings}
+    return {"touched": len(outcome.committed), "builds": outcome.builds, "cleared": sorted(before - after), "failed_trials": len(outcome.left)}
 
 
 def base_exposure(ws: Workspace, state_dir: Path, resolve: Callable[[Path], TreeExposure]) -> TreeExposure:
@@ -186,6 +201,12 @@ def render_plan_summary(report: dict) -> str:
         lines.append(f"exposure: {_exposure_text(result['exposure_before'])} -> {_exposure_text(result['exposure_after'])}")
     lines += [f"  + {c['label']} ({c['sha'][:7]})" for c in result["committed"]]
     lines += [f"  - {e['key']}: {e['reason']}" for e in result["left"]]
+    comparison = result.get("naive_comparison")
+    if comparison:
+        naive, giml = comparison["naive"], comparison["giml"]
+        lines.append(f"naive (each dependency to its newest, on its own): {naive['touched']} touched, {naive['passed']} passed, "
+                     f"{naive['builds']} build(s), {len(naive['cleared'])} advisories cleared")  # fmt: skip
+        lines.append(f"giml: {giml['touched']} touched, {giml['builds']} build(s), {len(giml['cleared'])} advisories cleared")
     naive = result.get("naive")
     if naive:
         verdict = "would have passed" if naive["passed"] else f"would have failed ({naive['reason']})"

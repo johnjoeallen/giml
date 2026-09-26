@@ -103,6 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan = commands.add_parser("plan", help="plan upgrades for a project (M2: sets up the workspace only)")
     plan.add_argument("path", type=Path, help="project directory containing pom.xml")
     plan.add_argument("--allow-detached", action="store_true", help="allow a detached HEAD as the base")
+    plan.add_argument("--compare-naive", action="store_true",
+                      help="also build each dependency's bump to its newest release on its own, to compare with the plan (costs builds)")
     plan.add_argument("--rewind-to", metavar="COMMIT", help="start from pom.xml as it was at COMMIT (synthetic)")
     plan.add_argument("--dry-run", action="store_true",
                       help="analyse only: resolve, match CVEs, list candidates and write a report; builds nothing")  # fmt: skip
@@ -236,7 +238,7 @@ def cmd_plan(args: argparse.Namespace, env: Environment, store: SqliteStateStore
         verified.append(run_baseline(ws, temp, root, config, catalog(args.config), env.environ, env.maven, store))
         if not verified[0].baseline.upgradeable:
             return verified[0].baseline.stop_reason
-        planned.append(run_planning(ws, verified[0], root, store, config, options, env.maven, env.sources, env.clock, env.java))
+        planned.append(run_planning(ws, verified[0], root, store, config, options, env.maven, env.sources, env.clock, env.java, args.compare_naive))
         return planned[0].stop_reason
 
     ws = workspace.set_up(args.path, root, store, env.clock, args.allow_detached, args.rewind_to, verify)

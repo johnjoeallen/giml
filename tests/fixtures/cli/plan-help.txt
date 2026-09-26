@@ -1,4 +1,4 @@
-usage: giml plan [-h] [--allow-detached] [--rewind-to COMMIT] [--dry-run]
+usage: giml plan [-h] [--allow-detached] [--compare-naive] [--rewind-to COMMIT] [--dry-run]
                  [--strategy {conservative,latest}] [--scope {cve,general}]
                  [--major-updates {disallowed,allowed,ml}]
                  [--major-updates-test-scope {disallowed,allowed}] [--gate-config FILE]
@@ -10,6 +10,8 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --allow-detached      allow a detached HEAD as the base
+  --compare-naive       also build each dependency's bump to its newest release on its own, to
+                        compare with the plan (costs builds)
   --rewind-to COMMIT    start from pom.xml as it was at COMMIT (synthetic)
   --dry-run             analyse only: resolve, match CVEs, list candidates and write a report;
                         builds nothing

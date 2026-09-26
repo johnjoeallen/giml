@@ -48,6 +48,7 @@ class TrialResult:
     outcomes: tuple[StageOutcome, ...]  # the stages that ran, in order
     new_violations: tuple[Violation, ...]  # enforcer violations the baseline did not have
     resolved_violations: tuple[Violation, ...]  # baseline violations the candidate no longer has
+    exposure: TreeExposure | None = None  # the candidate's resolved trees and advisories, when the vulnerability check ran
 
     @property
     def seconds(self) -> float:
@@ -112,18 +113,20 @@ class TrialRunner:
             self.reference = outcome.violations
         return self.reference
 
-    def verify(self, changes: Sequence[Change], pit: bool = True) -> TrialResult:
+    def verify(self, changes: Sequence[Change], pit: bool = True, at: str | None = None, judge_exposure: bool = True) -> TrialResult:
         """Apply ``changes`` to a trial worktree at the result branch's tip and run the stages there.
 
         ``pit=False`` leaves out PIT, the slowest stage: the search verifies its candidates without it and runs it
         only on the state it means to commit (a stage whose result is already cached costs nothing to repeat).
+        ``judge_exposure=False`` still resolves the tree (so the result carries its advisories) but does not fail on a worse one.
+        ``at`` starts the trial from another commit than the result branch's tip (the naive comparison starts from the baseline).
         """
         self._trials += 1
-        tip = Git(self.result_worktree).out("rev-parse", "HEAD")
+        tip = at or Git(self.result_worktree).out("rev-parse", "HEAD")
         trial = self.manager.create_trial(tip, self._trials)
         try:
             apply_changes([rebase(change, self.result_worktree, trial) for change in changes])
-            return self._stages_in(trial / self.subdir if self.subdir else trial, pit)
+            return self._stages_in(trial / self.subdir if self.subdir else trial, pit, judge_exposure)
         finally:
             self.manager.remove(trial)
 
@@ -138,41 +141,42 @@ class TrialRunner:
             return ("PIT produced no mutations",)
         return tuple(f"{name} {score:.1f} is below {floor:.1f}" for name, score, floor in scores if score is not None and score < floor)
 
-    def _exposure_stage(self, project: Path) -> StageOutcome | None:
+    def _exposure_stage(self, project: Path, judge: bool = True) -> tuple[StageOutcome, TreeExposure | None] | None:
         """A candidate that makes the vulnerabilities worse fails like a broken build, without one being run."""
         if self.resolve_exposure is None or self.exposure_reference is None:
             return None
-        started = time.monotonic()
+        started, tree = time.monotonic(), None
         try:
-            lines, failure_class = worse_exposure(self.exposure_reference, self.resolve_exposure(project)), VULNERABILITY_WORSE
+            tree = self.resolve_exposure(project)
+            lines, failure_class = (worse_exposure(self.exposure_reference, tree) if judge else ()), VULNERABILITY_WORSE
         except ResolutionError as exc:
             lines, failure_class = (str(exc).replace(str(project), "<project>"),), RESOLUTION
         failure = _digest(failure_class, lines) if lines else None
-        return StageOutcome("exposure", failure is None, time.monotonic() - started, Path(os.devnull), failure)
+        return StageOutcome("exposure", failure is None, time.monotonic() - started, Path(os.devnull), failure), tree
 
-    def _stages_in(self, project: Path, pit: bool) -> TrialResult:
+    def _stages_in(self, project: Path, pit: bool, judge_exposure: bool = True) -> TrialResult:
         outcomes: list[StageOutcome] = []
         resolved: tuple[Violation, ...] = ()
-        early = self._exposure_stage(project)
+        early, tree = self._exposure_stage(project, judge_exposure) or (None, None)
         if early is not None:
             outcomes.append(early)
             if not early.passed:
-                return TrialResult(False, False, "exposure", early.failure, tuple(outcomes), (), ())
+                return TrialResult(False, False, "exposure", early.failure, tuple(outcomes), (), (), tree)
         for stage in self._stages(pit):
             outcome = self._run(project, stage)
             outcomes.append(outcome)
             if outcome.retryable:
-                return TrialResult(False, True, stage, outcome.failure, tuple(outcomes), (), ())
+                return TrialResult(False, True, stage, outcome.failure, tuple(outcomes), (), (), tree)
             if stage == "enforcer":
                 reference = self.reference
                 new = new_violations(reference, outcome.violations)
                 resolved = resolved_violations(reference, outcome.violations)
                 if new:
-                    return TrialResult(False, False, stage, _enforcer_failure(outcome, new), tuple(outcomes), new, resolved)
+                    return TrialResult(False, False, stage, _enforcer_failure(outcome, new), tuple(outcomes), new, resolved, tree)
                 if not outcome.passed and not outcome.violations:  # failed for a reason that is not a violation we can compare
-                    return TrialResult(False, False, stage, outcome.failure, tuple(outcomes), (), ())
+                    return TrialResult(False, False, stage, outcome.failure, tuple(outcomes), (), (), tree)
             elif not outcome.passed:
-                return TrialResult(False, False, stage, outcome.failure, tuple(outcomes), (), resolved)
+                return TrialResult(False, False, stage, outcome.failure, tuple(outcomes), (), resolved, tree)
             elif stage == "pit" and (lines := self._pit_shortfall(outcome)):
-                return TrialResult(False, False, stage, _digest(MUTATION_DROPPED, lines), tuple(outcomes), (), resolved)
-        return TrialResult(True, False, None, None, tuple(outcomes), (), resolved)
+                return TrialResult(False, False, stage, _digest(MUTATION_DROPPED, lines), tuple(outcomes), (), resolved, tree)
+        return TrialResult(True, False, None, None, tuple(outcomes), (), resolved, tree)
