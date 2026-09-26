@@ -133,10 +133,7 @@ def _enforcer(session: _Session) -> dict:
 
 
 def _startup_check(project_dir: Path) -> str:
-    settings = project_dir / ".redkite" / "settings.yml"
-    if settings.is_file() and re.search(r"^\s*profile\s*:", settings.read_text(encoding="utf-8"), re.M):
-        return "configured"  # verified from M6
-    return "not_configured"
+    return "configured" if load_project_settings(project_dir).smoke is not None else "not_configured"  # verified from M6
 
 
 def assess(

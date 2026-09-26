@@ -25,7 +25,7 @@ These are enforced by code and tests, not just convention:
 
 ## Current status
 
-- Milestone: **M5 (deterministic planner) complete, awaiting review** (2026-09-26). `giml plan` analyses, searches (conservative or latest with bisection, build budget, ddmin isolation, re-promotion, deferrals), verifies every trial through exposure (worse vulnerabilities fail without a build), compile, enforcer, unit, integration and (once, on the state to keep) PIT, commits one step per accepted change, aligns convergence conflicts, skips versions whose API break the project uses (japicmp, built last as a fallback), logs trials and failed transitions, and writes `plan.{json,md}` with the naive baseline and, for rewind runs, the three-state comparison. Next: raise the mutation margin, then M6 (startup verification), which is waiting on spec CONFIRM item Q9 (does any target project need a database provisioned for the startup check; Q5 is answered: `.giml/settings.yml`); then the ML milestones (spec section 17). `giml plan --compare-naive` measures the naive baseline (each dependency to its newest, on its own) against giml's figures.
+- Milestone: **M5 (deterministic planner) complete, awaiting review** (2026-09-26). `giml plan` analyses, searches (conservative or latest with bisection, build budget, ddmin isolation, re-promotion, deferrals), verifies every trial through exposure (worse vulnerabilities fail without a build), compile, enforcer, unit, integration and (once, on the state to keep) PIT, commits one step per accepted change, aligns convergence conflicts, skips versions whose API break the project uses (japicmp, built last as a fallback), logs trials and failed transitions, and writes `plan.{json,md}` with the naive baseline and, for rewind runs, the three-state comparison. Next: raise the mutation margin, then M6 (startup verification), which is in progress: settings loader done (`smoke` section in `.giml/settings.yml`), then the schema lifecycle, smoke runner and pipeline stage (Q5 and Q9 are answered); then the ML milestones (spec section 17). `giml plan --compare-naive` measures the naive baseline (each dependency to its newest, on its own) against giml's figures.
 - M1 accepted 2026-09-24. M2 checkpoint recorded (dff9705). M3 accepted 2026-09-25 (survey: redkite Tier A at 970df7f, grip and arete no tier yet).
 - Self-gate at M5a: Tier B PASS (line 99.09%, branch 96.29%, test strength 88.08%, mutation coverage 88.04%, excluded share 1.76%, 0 flaky of 5 runs). 1,194 fast tests pass.
 - Self-gate at M5 (2026-09-26): Tier B PASS (line 98.64%, branch 96.09%, test strength 85.68%, mutation 85.47%, 0 flaky). The test-strength margin over 85 is only 0.68 points: new code needs tests that kill mutants before more is added. 1,278 fast tests and 19 slow tests (about 4 minutes).
@@ -73,6 +73,8 @@ Python package under `src/giml/` with tests under `tests/`; see spec section 3 f
 ## Decisions log
 
 Newest first. One line each: date, decision, reason.
+
+- 2026-09-26: Startup check database support (spec 12.3): the settings can drive a per-trial `DROP SCHEMA ... CASCADE; CREATE SCHEMA` on a PostgreSQL database reached through env-var names in the settings (via `psql`), and the project's own smoke profile runs Flyway at boot; the profile name is a required `smoke.profile` in `.giml/settings.yml`, not a giml default. User decision.
 
 - 2026-09-26: The startup check's settings (`smoke` section) live in `.giml/settings.yml` with the other project settings (spec Q5). User answer.
 

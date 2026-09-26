@@ -591,14 +591,33 @@ Rules:
 6. Capture stdout/stderr to the run log directory (with secret redaction).
 7. Compare WARN/ERROR lines against the baseline run; record new ones as features.
 
-### 12.3 Local PostgreSQL
+### 12.3 Database schema per trial (decided 2026-09-26)
 
-- The smoke profile points at a local PostgreSQL; connection details come from environment variables that the runner injects.
-- **Fresh database per trial**: create `giml_<run>_<trial>` before startup, drop it after (in `finally`). Sweep orphaned `giml_*` databases at the start of each run.
-- Dedicated least-privilege role, allowed to create/drop only `giml_*` databases; never a shared dev database and never anything holding real data.
-- Migrations (Flyway/Liquibase) run as part of startup; failures classify as `migration`.
-- Preflight: if PostgreSQL is unreachable, mark startup check `unavailable` for the run; do **not** blame the candidate.
-- Server may be a local install or container; the runner only needs host, port and credentials.
+The settings may drive a schema lifecycle; the project's own smoke profile runs its migrations (Flyway or Liquibase) as part of application startup, against the schema giml provides. The profile name is the project's choice, in `.giml/settings.yml` (`smoke.profile`, required), never a giml default.
+
+```yaml
+smoke:
+  profile: smoke
+  env:                                   # placeholders are filled in by giml at run time
+    SPRING_DATASOURCE_URL: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}?currentSchema=${TRIAL_SCHEMA}
+    SPRING_DATASOURCE_USERNAME: ${DB_USER}
+    SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+    SPRING_FLYWAY_SCHEMAS: ${TRIAL_SCHEMA}
+  database:                              # optional; without it giml provisions nothing
+    kind: postgresql
+    host_env: GIML_PG_HOST               # NAMES of the runner's own environment variables, never values
+    port_env: GIML_PG_PORT
+    name_env: GIML_PG_DATABASE
+    user_env: GIML_PG_USER
+    password_env: GIML_PG_PASSWORD
+    schema_prefix: giml                  # optional, default giml
+```
+
+- Per trial giml runs `DROP SCHEMA IF EXISTS <s> CASCADE; CREATE SCHEMA <s>` with `<s>` = `<prefix>_<run>_<trial>` (lower case letters, digits and `_` only, built by giml and checked against a strict pattern, so no SQL ever comes from the repository), through the `psql` client found on the runner's `PATH`, and drops the schema again in a `finally` path. At the start of a run it sweeps schemas with the project's prefix left over from crashed runs.
+- The database named by `name_env` is a dedicated one and the role least-privilege (create and drop schemas there); never a shared development database and never anything holding real data. The password is supplied to `psql` and the application only through the environment (`PGPASSWORD`, the `${DB_PASSWORD}` placeholder), never written to a report, log or commit.
+- Placeholders: `${PORT}` and `${TRIAL_SCHEMA}` always; `${DB_HOST}`, `${DB_PORT}`, `${DB_NAME}`, `${DB_USER}` and `${DB_PASSWORD}` only with a `database` section. An unknown placeholder, a literal value under a secret-looking name, and any key that looks like a command (`command`, `exec`, `args`, ...) are configuration errors (exit 5).
+- Migration failures (Flyway or Liquibase errors in the startup log) classify as `migration`; other failures to boot as `startup`.
+- Preflight: an unreachable server or an unset variable marks the startup check `unavailable` for the run; the candidate is not blamed.
 
 ### 12.4 Optional smoke requests
 
@@ -773,7 +792,7 @@ Work in order; stop at each checkpoint.
 6. Initial project set: which repositories, and which is deliberately behind on dependencies. (M3/M5) Partly answered 2026-09-24: redkite, arete and grip (all github.com/johnjoeallen, each with `.giml/settings.yml` `jdk: 21`); chronograf dropped. The deliberately-behind project for M5 is still open.
 7. ~~Initial tier numbers.~~ Answered 2026-09-24: keep config version 3 as is. The M3 survey (redkite, chronograf) found both projects far below Tier B, so it cannot calibrate the boundaries; revisit when a project scores near one.
 8. ~~Metric definitions.~~ Answered 2026-09-24: the policy's 80% is PIT mutation coverage (killed / all mutants) and its 85% is test strength (killed / mutants in covered code); Tier B already says exactly this.
-9. Which local PostgreSQL setup (install or container) and role provisioning. (M6)
+9. ~~Which local PostgreSQL setup~~ Answered 2026-09-26: the settings drive a schema drop/create per trial and the project's smoke profile runs Flyway; the server is whatever the runner's environment variables point at (section 12.3).
 10. ~~Source of per-version release dates.~~ Answered 2026-09-24: `Last-Modified` of each version's `.pom` (search API index found stale); see section 7.2.
 11. ~~CVSS scoring.~~ Answered 2026-09-24: in-house CVSS v3.x calculator, OSV/GHSA label fallback, score source recorded; see section 7.1.
 

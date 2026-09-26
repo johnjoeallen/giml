@@ -6,6 +6,7 @@ Strict by design: unknown or duplicate keys are errors, so a typo cannot silentl
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import re
 from dataclasses import dataclass
@@ -307,6 +308,52 @@ def load_global_config(path: Path) -> GlobalConfig:
     return GlobalConfig(tuple(_absolute_path(entry, f"{path}.jdks[{i}]") for i, entry in enumerate(jdks)))
 
 
+ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
+PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+SCHEMA_PREFIX = re.compile(r"[a-z][a-z0-9_]{0,20}")
+PLACEHOLDER = re.compile(r"\$\{([A-Z_]+)\}")
+RUNTIME_PLACEHOLDERS = frozenset({"PORT", "TRIAL_SCHEMA"})
+DATABASE_PLACEHOLDERS = frozenset({"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"})
+SECRET_NAME = re.compile(r"PASSWORD|SECRET|TOKEN|KEY|CREDENTIAL|PASSPHRASE", re.IGNORECASE)
+COMMAND_KEYS = frozenset({"command", "cmd", "run", "exec", "script", "args", "arguments", "java_opts", "jvm_args", "shell", "entrypoint"})
+
+
+@dataclass(frozen=True)
+class ReadySettings:
+    """When the started application counts as ready (spec 12.2)."""
+
+    http: str | None = None  # a path on the loopback port; without one, a successful connect plus the "Started" log line
+    contains: str | None = None  # text the response body must contain
+    timeout_seconds: int = 60
+
+
+@dataclass(frozen=True)
+class DatabaseSettings:
+    """A PostgreSQL server the startup check gets a fresh schema on, per trial (spec 12.3).
+
+    Only the *names* of the runner's own environment variables are recorded here; the values (including the
+    password) are read from the runner's environment and never appear in the repository, a report or a log.
+    """
+
+    host_env: str
+    port_env: str
+    name_env: str  # the database inside which giml_* schemas are created and dropped
+    user_env: str
+    password_env: str
+    schema_prefix: str = "giml"
+
+
+@dataclass(frozen=True)
+class SmokeSettings:
+    """The ``smoke`` section: how to boot the packaged application (spec 12.1). Data only, never a command."""
+
+    profile: str  # the application's own smoke profile (it decides what a smoke run configures, Flyway included)
+    artifact: str | None = None  # a path relative to the project, for example target/app.jar; default: the one executable jar
+    env: dict[str, str] | None = None  # extra environment for the application; values may use ${PORT}, ${TRIAL_SCHEMA}, ${DB_*}
+    ready: ReadySettings = ReadySettings()
+    database: DatabaseSettings | None = None
+
+
 @dataclass(frozen=True)
 class ProjectSettings:
     """A project's ``.giml/settings.yml``, read from giml's worktree (the base commit)."""
@@ -315,6 +362,7 @@ class ProjectSettings:
     jdk: str | None = None  # a major ("17") or full ("17.0.16") version
     java_home: Path | None = None
     allow_exclusions: bool = False  # may the planner add <exclusion>s to fix enforcer violations (spec 8.4)
+    smoke: SmokeSettings | None = None  # the startup check, when configured (spec 12)
 
 
 def project_settings_path(project_dir: Path) -> Path:
@@ -331,6 +379,7 @@ def load_project_settings(project_dir: Path) -> ProjectSettings:
     jdk = root.optional("jdk")
     java_home = root.optional("java_home")
     allow_exclusions = root.optional("allow_exclusions")
+    smoke_data = root.optional("smoke")
     root.finish()
     if allow_exclusions is None:
         allow_exclusions = False
@@ -345,4 +394,87 @@ def load_project_settings(project_dir: Path) -> ProjectSettings:
         jdk = str(jdk)
     if java_home is not None:
         java_home = _absolute_path(java_home, f"{path}.java_home")
-    return ProjectSettings(path, jdk, java_home, allow_exclusions)
+    return ProjectSettings(path, jdk, java_home, allow_exclusions, _parse_smoke(smoke_data, f"{path}.smoke") if smoke_data is not None else None)
+
+
+def _env_name(value: Any, where: str) -> str:
+    if not isinstance(value, str) or not ENV_NAME.fullmatch(value):
+        raise ConfigError(f"{where}: expected the NAME of an environment variable (upper case letters, digits, _), got {value!r}")
+    return value
+
+
+def _reject_commands(data: Any, where: str) -> None:
+    if isinstance(data, dict):
+        commands = sorted(str(k) for k in data if str(k).lower() in COMMAND_KEYS)
+        if commands:
+            raise ConfigError(f"{where}: {', '.join(commands)}: settings are data only and never carry a command (hard rule 5)")
+
+
+def _parse_ready(data: Any, where: str) -> ReadySettings:
+    _reject_commands(data, where)
+    section = _Section(data, where)
+    http, contains, timeout = section.optional("http"), section.optional("contains"), section.optional("timeout_seconds")
+    section.finish()
+    if http is not None and (not isinstance(http, str) or not http.startswith("/") or re.search(r"\s", http)):
+        raise ConfigError(f"{where}.http: expected a path starting with / and no spaces, got {http!r}")
+    if contains is not None and (not isinstance(contains, str) or not contains):
+        raise ConfigError(f"{where}.contains: expected a non-empty string, got {contains!r}")
+    if contains is not None and http is None:
+        raise ConfigError(f"{where}.contains: needs http, the response it is looked for in")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 600):
+        raise ConfigError(f"{where}.timeout_seconds: expected 1-600, got {timeout!r}")
+    return ReadySettings(http, contains, 60 if timeout is None else timeout)
+
+
+def _parse_database(data: Any, where: str) -> DatabaseSettings:
+    _reject_commands(data, where)
+    section = _Section(data, where)
+    kind = section.text("kind")
+    settings = DatabaseSettings(*(_env_name(section.optional(f"{name}_env"), f"{where}.{name}_env")
+                                  for name in ("host", "port", "name", "user", "password")))  # fmt: skip
+    prefix = section.optional("schema_prefix")
+    section.finish()
+    if kind != "postgresql":
+        raise ConfigError(f"{where}.kind: only postgresql is supported, got {kind!r}")
+    if prefix is None:
+        return settings
+    if not isinstance(prefix, str) or not SCHEMA_PREFIX.fullmatch(prefix):
+        raise ConfigError(f"{where}.schema_prefix: expected lower case letters, digits and _ starting with a letter (at most 21), got {prefix!r}")
+    return dataclasses.replace(settings, schema_prefix=prefix)
+
+
+def _parse_smoke_env(data: Any, where: str, database: bool) -> dict[str, str]:
+    if not isinstance(data, dict):
+        raise ConfigError(f"{where}: expected a mapping of environment variable names to values")
+    allowed = RUNTIME_PLACEHOLDERS | (DATABASE_PLACEHOLDERS if database else frozenset())
+    env: dict[str, str] = {}
+    for name, value in data.items():
+        _env_name(name, f"{where} key {name!r}")
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise ConfigError(f"{where}.{name}: expected a string, got {value!r}")
+        text = str(value)
+        unknown = sorted(set(PLACEHOLDER.findall(text)) - allowed)
+        if unknown:
+            raise ConfigError(f"{where}.{name}: unknown placeholder(s) ${{{'}, ${'.join(unknown)}}} "
+                              f"(known: {', '.join(sorted(allowed))}; the DB_* ones need a database section)")  # fmt: skip
+        if SECRET_NAME.search(name) and PLACEHOLDER.sub("", text).strip():
+            raise ConfigError(f"{where}.{name}: looks like a secret with a literal value; secrets come from the runner's own "
+                              "environment (use a ${DB_PASSWORD} placeholder or leave it out), never from the repository")  # fmt: skip
+        env[name] = text
+    return env
+
+
+def _parse_smoke(data: Any, where: str) -> SmokeSettings:
+    _reject_commands(data, where)
+    section = _Section(data, where)
+    profile, artifact = section.text("profile"), section.optional("artifact")
+    env_data, ready_data, database_data = section.optional("env"), section.optional("ready"), section.optional("database")
+    section.finish()
+    if not PROFILE_NAME.fullmatch(profile):
+        raise ConfigError(f"{where}.profile: expected a profile name (letters, digits, - _ .), got {profile!r}")
+    if artifact is not None and (not isinstance(artifact, str) or not artifact or artifact.startswith("/") or ".." in Path(artifact).parts):
+        raise ConfigError(f"{where}.artifact: expected a path inside the project such as target/app.jar, got {artifact!r}")
+    database = _parse_database(database_data, f"{where}.database") if database_data is not None else None
+    env = _parse_smoke_env(env_data, f"{where}.env", database is not None) if env_data is not None else {}
+    ready = _parse_ready(ready_data, f"{where}.ready") if ready_data is not None else ReadySettings()
+    return SmokeSettings(profile, artifact, env, ready, database)
