@@ -146,6 +146,7 @@ def run_planning(ws: Workspace, baseline_run: BaselineRun, state_dir: Path, stor
     if ws.rewind is not None and outcome is not None and outcome.final is not None:
         report["rewind_comparison"] = compare_states(first.exposure, outcome.final, base_exposure(ws, state_dir, trial_exposure))
     directory = state_dir / "reports" / ws.run_id
+    directory.mkdir(parents=True, exist_ok=True)  # the baseline report normally made it, but the planner does not rely on that
     json_path, markdown_path = directory / "plan.json", directory / "plan.md"
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     markdown_path.write_text(render_plan_markdown(report), encoding="utf-8")
