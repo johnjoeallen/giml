@@ -55,6 +55,23 @@ def publish(repo: Path, version: str, work: Path) -> None:
         f"<artifactId>lib</artifactId><version>{version}</version></project>")  # fmt: skip
 
 
+def publish_other(repo: Path, version: str, work: Path) -> None:
+    """fx:other 1.1.0 depends on fx:lib 1.0.1, so next to the application's own lib the tree has two versions of it."""
+    directory = repo / "fx" / "other" / version
+    directory.mkdir(parents=True)
+    source = work / f"other-{version}" / "fx" / "Other.java"
+    source.parent.mkdir(parents=True)
+    source.write_text(f'package fx;\npublic class Other {{ public static String name() {{ return "other {version}"; }} }}\n')
+    out = work / f"other-{version}" / "out"
+    subprocess.run(["javac", "--release", "17", "-d", str(out), str(source)], check=True, capture_output=True)
+    subprocess.run(["jar", "cf", str(directory / f"other-{version}.jar"), "-C", str(out), "."], check=True)
+    dependency = ("<dependencies><dependency><groupId>fx</groupId><artifactId>lib</artifactId><version>1.0.1</version></dependency></dependencies>"
+                  if version == "1.1.0" else "")  # fmt: skip
+    (directory / f"other-{version}.pom").write_text(
+        f'<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><groupId>fx</groupId>'
+        f"<artifactId>other</artifactId><version>{version}</version>{dependency}</project>")  # fmt: skip
+
+
 APP_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
   <groupId>fx</groupId>
@@ -73,25 +90,45 @@ APP_POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
       <artifactId>lib</artifactId>
       <version>1.0.0</version>
     </dependency>
+    <dependency>
+      <groupId>fx</groupId>
+      <artifactId>other</artifactId>
+      <version>1.0.0</version>
+    </dependency>
   </dependencies>
 </project>
 """
 
 
 class Advisories:
+    """fx:lib below ``fixed`` is affected; ``worse`` versions carry a second, critical advisory."""
+
     snapshot_id = "osv-fx"
 
+    def __init__(self, fixed="1.0.2", worse=()):
+        self.fixed, self.worse = fixed, set(worse)
+
     def affecting(self, coordinate, version):
-        if str(coordinate) == "fx:lib" and ComparableVersion(version) < ComparableVersion("1.0.2"):
-            return [Finding("GHSA-fx", ("CVE-FX-1",), Severity(SeverityRating.HIGH, SeveritySource.LABEL), coordinate, version, "0", "1.0.2")]
-        return []
+        if str(coordinate) != "fx:lib":
+            return []
+        found = []
+        if ComparableVersion(version) < ComparableVersion(self.fixed):
+            found.append(Finding("GHSA-fx", ("CVE-FX-1",), Severity(SeverityRating.HIGH, SeveritySource.LABEL), coordinate, version, "0", self.fixed))
+        if version in self.worse:
+            found.append(Finding("GHSA-worse", ("CVE-FX-2",), Severity(SeverityRating.CRITICAL, SeveritySource.LABEL), coordinate, version, "0", "9"))
+        return found
 
 
 class Metadata:
     snapshot_id = "central-fx"
 
     def versions(self, coordinate):
-        return [VersionRelease(v, WHEN) for v in VERSIONS] if str(coordinate) == "fx:lib" else None
+        versions = {"fx:lib": VERSIONS, "fx:other": ["1.0.0", "1.1.0"]}.get(str(coordinate))
+        return [VersionRelease(v, WHEN) for v in versions] if versions else None
+
+
+def sources_for(**advisories) -> Sources:
+    return Sources(lambda snapshot: Advisories(**advisories), lambda snapshot: Metadata())
 
 
 @pytest.fixture
@@ -101,6 +138,8 @@ def scenario(tmp_path, real_home):
     repo = tmp_path / "fxrepo"
     for version in VERSIONS:
         publish(repo, version, tmp_path / "work")
+    for version in ("1.0.0", "1.1.0"):
+        publish_other(repo, version, tmp_path / "work")
     project = tmp_path / "app"
     (project / "src" / "main" / "java" / "fx").mkdir(parents=True)
     (project / "pom.xml").write_text(APP_POM.format(repo=repo))
@@ -124,7 +163,7 @@ def scenario(tmp_path, real_home):
     config["verification"]["pit"] = "off"
     config_path = tmp_path / "gate.yaml"
     config_path.write_text(yaml.safe_dump(config))
-    env = Environment(maven=run_maven, sources=Sources(lambda snapshot: Advisories(), lambda snapshot: Metadata()))
+    env = Environment(maven=run_maven, sources=sources_for())
     return project, state, config_path, env
 
 
@@ -155,3 +194,35 @@ def test_conservative_takes_the_patch_fix_without_meeting_the_breaking_versions(
     result = report(scenario[1])["result"]
     assert [c["kind"] for c in result["committed"]] == ["cve_patch"] and result["failed_transitions"] == []
     assert result["builds"] == 1
+
+
+def test_a_fix_that_only_exists_in_a_breaking_version_is_deferred_with_its_reason(scenario, capsys):
+    scenario[3].sources = sources_for(fixed="1.1.0")
+    assert plan(scenario) == ExitCode.NO_IMPROVEMENT
+    result = report(scenario[1])["result"]
+    (left,) = result["left"]
+    assert result["committed"] == [] and left["coordinates"] == ["fx:lib"]
+    assert left["reason"].startswith("no fixing version passed") and "compile" in left["reason"]
+    assert result["exposure_after"]["max_severity"] == "HIGH"
+    with SqliteStateStore(scenario[1] / "state.db") as store:
+        (deferral,) = store.list_deferrals(store.list_projects()[0].id, open_only=True)
+        assert (deferral.coordinate, deferral.held_at_version) == ("fx:lib", "1.0.0")
+        assert [t.failure_class for t in store.list_transitions("fx:lib")] == ["compile"]
+
+
+def test_a_version_that_brings_a_worse_advisory_fails_without_a_build(scenario):
+    scenario[3].sources = sources_for(worse={"1.0.2"})
+    assert plan(scenario) == ExitCode.NO_IMPROVEMENT
+    result = report(scenario[1])["result"]
+    failed = {(t["to"], t["failure_class"]) for t in result["failed_transitions"]}
+    assert result["committed"] == [] and failed == {("1.0.2", "vulnerability_worse"), ("1.1.0", "compile")}
+    assert result["builds"] == 1  # only 1.1.0 was built; 1.0.2 failed on its resolved tree
+
+
+def test_a_general_update_that_splits_a_dependency_across_two_versions_fails_the_enforcer(scenario, capsys):
+    assert plan(scenario, "--scope", "general") == ExitCode.SUCCESS
+    result = report(scenario[1])["result"]
+    assert [c["label"] for c in result["committed"]] == ["fx:lib 1.0.0 → 1.0.2 (cve_patch)"]
+    (left,) = [e for e in result["left"] if e["coordinates"] == ["fx:other"]]
+    assert "enforcer" in left["reason"] and result["enforcer_clean"]
+    assert {(t["to"], t["failure_class"]) for t in result["failed_transitions"]} == {("1.1.0", "enforcer_convergence")}
