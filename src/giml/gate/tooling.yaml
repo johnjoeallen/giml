@@ -29,3 +29,8 @@ dependency_plugin:                # fetches giml's own tools into <state>/tools
   groupId: org.apache.maven.plugins
   artifactId: maven-dependency-plugin
   version: 3.11.0
+japicmp:                          # compares a dependency's API between two versions (candidate filtering, spec 8.2)
+  groupId: com.github.siom79.japicmp
+  artifactId: japicmp
+  version: 0.26.2
+  classifier: jar-with-dependencies
