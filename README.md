@@ -38,10 +38,15 @@ Enforced by code and tests, not just convention (full detail in
 
 ## Requirements
 
+- Linux or macOS. **Windows is not supported** (`docs/platform.md`): the
+  per-project run lock uses `fcntl.flock` and hook-disabling relies on
+  `os.devnull`, both POSIX-only. On Windows, run GiML inside WSL2 (a real
+  Linux environment) instead.
 - Python >= 3.12
 - Java + Maven (a working `mvn` on `PATH`, or a project-specific JDK
   configured per `docs/platform.md`)
-- git
+- git >= 2.47 (uses `worktree add/remove/prune`, `restore --source`,
+  `status --porcelain=v2`)
 
 ## Setup
 
@@ -55,6 +60,10 @@ Add the `ml` extra for the ML layers (scikit-learn, joblib):
 ```bash
 .venv/bin/pip install -e '.[dev,ml]'
 ```
+
+On WSL2, install Python, git, Java and Maven inside the WSL distro (not the
+Windows host) and run all commands from the WSL shell — GiML needs a real
+POSIX filesystem and process model underneath it.
 
 ## Usage
 
