@@ -5,12 +5,12 @@ verifies joint Maven dependency upgrades for a Java project.
 
 GiML takes its idea of gated, verified upgrades from
 [RedKite](https://github.com/johnjoeallen/redkite), but drops RedKite's UI in
-favour of a fully automated flow: point GiML at a project and it plans,
-builds, and verifies candidate upgrades itself, leaving the result on a local
-branch for the developer to review. Where a joint upgrade is blocked by
-dependency convergence, an ML layer is planned to help decide how to proceed
-(see [Roadmap](#roadmap)) — deterministic verification is always the source
-of truth, ML is only ever a prior.
+favour of a fully automated flow: run it in the application's own folder and
+it plans, builds, and verifies candidate upgrades itself, leaving the result
+on a local branch for the developer to review. Where a joint upgrade is
+blocked by dependency convergence, an ML layer is planned to help decide how
+to proceed (see [Roadmap](#roadmap)) — deterministic verification is always
+the source of truth, ML is only ever a prior.
 
 GiML never pushes and never opens a pull request.
 
