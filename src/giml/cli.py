@@ -26,6 +26,7 @@ from giml import workspace
 from giml.core.config import (
     MAJOR_UPDATE_MODES, PLANNING_SCOPES, PLANNING_STRATEGIES, TEST_SCOPE_MODES, ConfigError, default_gate_config_path, load_gate_config,
 )  # fmt: skip
+from giml.core.platform import BashNotFound
 from giml.gate.assess import JavaRunner, MavenRunner, PrerequisiteError, UnknownTierError, run_java
 from giml.gate.assess import assess as assess_project
 from giml.gate.reports import ReportError
@@ -365,7 +366,7 @@ def main(argv: Sequence[str] | None = None, env: Environment | None = None) -> i
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.CONFIGURATION
     except (FetchError, MetadataError, GitError, BranchExistsError, ForeignWorktreeError, MavenNotFound,
-            ReportError, InsufficientSpace, BaselineInfrastructureError, subprocess.TimeoutExpired, zipfile.BadZipFile,
-            sqlite3.Error, OSError) as exc:  # fmt: skip
+            ReportError, InsufficientSpace, BaselineInfrastructureError, BashNotFound, subprocess.TimeoutExpired,
+            zipfile.BadZipFile, sqlite3.Error, OSError) as exc:  # fmt: skip
         print(f"giml: error: {exc}", file=sys.stderr)
         return ExitCode.INFRASTRUCTURE

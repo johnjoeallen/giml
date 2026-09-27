@@ -79,6 +79,53 @@ def test_windows_free_space_has_no_inode_count(monkeypatch, tmp_path):
     assert platform.free_space(tmp_path) == platform.FreeSpace(bytes=123, inodes=None)
 
 
+def test_posix_script_argv_runs_the_script_directly(monkeypatch, tmp_path):
+    if sys.platform != "win32":
+        monkeypatch.setattr(platform, "_WINDOWS", False)
+    script = tmp_path / "fake"
+    assert platform.posix_script_argv(script, ["-B"]) == [str(script), "-B"]
+
+
+def test_windows_posix_script_argv_runs_it_through_bash(monkeypatch, tmp_path):
+    monkeypatch.setattr(platform, "_WINDOWS", True)
+    monkeypatch.setattr(platform.shutil, "which", lambda name: "C:\\Git\\bin\\bash.exe" if name == "bash" else None)
+    script = tmp_path / "fake"
+    assert platform.posix_script_argv(script, ["-B"]) == ["C:\\Git\\bin\\bash.exe", str(script), "-B"]
+
+
+def test_windows_posix_script_argv_without_bash_is_reported(monkeypatch, tmp_path):
+    monkeypatch.setattr(platform, "_WINDOWS", True)
+    monkeypatch.setattr(platform.shutil, "which", lambda name: None)
+    with pytest.raises(platform.BashNotFound, match="bash is not on PATH"):
+        platform.posix_script_argv(tmp_path / "fake", [])
+
+
+def test_posix_native_argv_runs_the_resolved_command_directly(monkeypatch):
+    if sys.platform != "win32":
+        monkeypatch.setattr(platform, "_WINDOWS", False)
+    assert platform.native_argv("/usr/bin/mvn", ["-B"]) == ["/usr/bin/mvn", "-B"]
+
+
+def test_windows_native_argv_leaves_a_real_exe_untouched(monkeypatch):
+    monkeypatch.setattr(platform, "_WINDOWS", True)
+    assert platform.native_argv("C:\\jdk\\bin\\java.exe", ["-version"]) == ["C:\\jdk\\bin\\java.exe", "-version"]
+
+
+def test_windows_native_argv_runs_a_cmd_sibling_script_through_bash(monkeypatch, tmp_path):
+    monkeypatch.setattr(platform, "_WINDOWS", True)
+    monkeypatch.setattr(platform.shutil, "which", lambda name: "C:\\Git\\bin\\bash.exe" if name == "bash" else None)
+    (tmp_path / "mvn").write_text("")
+    mvn_cmd = tmp_path / "mvn.cmd"
+    assert platform.native_argv(str(mvn_cmd), ["-B"]) == ["C:\\Git\\bin\\bash.exe", str(tmp_path / "mvn"), "-B"]
+
+
+def test_windows_native_argv_without_the_sibling_script_is_reported(monkeypatch, tmp_path):
+    monkeypatch.setattr(platform, "_WINDOWS", True)
+    mvn_cmd = tmp_path / "mvn.cmd"
+    with pytest.raises(platform.BashNotFound, match="is missing"):
+        platform.native_argv(str(mvn_cmd), [])
+
+
 def test_windows_popen_uses_a_new_process_group(monkeypatch, tmp_path):
     monkeypatch.setattr(platform, "_WINDOWS", True)
     captured = {}

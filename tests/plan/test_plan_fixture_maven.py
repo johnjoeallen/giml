@@ -351,7 +351,7 @@ def test_a_rewind_run_reaches_the_version_the_developer_moved_to_and_compares_th
     (row,) = [r for r in document["rewind_comparison"]["rows"] if r["coordinate"] == "fx:lib"]
     assert (row["rewound"]["versions"], row["result"]["versions"], row["base"]["versions"]) == (["1.0.0"], ["1.0.2"], ["1.0.2"])
     assert (row["rewound"]["advisories"], row["result"]["advisories"], row["base"]["advisories"]) == (1, 0, 0)
-    assert "## Rewind comparison" in next(scenario[1].glob("reports/*/plan.md")).read_text()
+    assert "## Rewind comparison" in next(scenario[1].glob("reports/*/plan.md")).read_text(encoding="utf-8")
 
 
 def test_two_updates_that_only_clash_together_are_isolated_and_the_less_important_one_is_deferred(pair_scenario, capsys):

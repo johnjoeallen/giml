@@ -1,4 +1,5 @@
 import datetime
+import re
 from pathlib import Path
 
 import pytest
@@ -161,7 +162,7 @@ def test_strength_not_above_coverage_warns(strength):
 def test_load_names_the_file_on_error(tmp_path):
     path = tmp_path / "gate.yaml"
     path.write_text("version: 2\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match=rf"^{path}: <root>\.tiers: required key missing"):
+    with pytest.raises(ConfigError, match=rf"^{re.escape(str(path))}: <root>\.tiers: required key missing"):
         load_gate_config(path)
 
 

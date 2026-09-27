@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
@@ -76,6 +77,43 @@ def no_hooks_path() -> Path:
     path = Path(tempfile.gettempdir()) / "giml-no-hooks"
     path.mkdir(exist_ok=True)
     return path
+
+
+class BashNotFound(RuntimeError):
+    """No ``bash`` on PATH; giml requires Git for Windows' Git Bash to run POSIX shell scripts there."""
+
+
+def posix_script_argv(script: Path, args: Sequence[str]) -> list[str]:
+    """argv to run a POSIX shell script (``#!/bin/sh``) across platforms.
+
+    POSIX runs it directly; the shebang and executable bit do the work. Windows' ``CreateProcess``
+    has no shebang support, so giml requires Git for Windows there (a POSIX-compatible git is
+    already a hard requirement) and runs the script through its bundled ``bash`` instead.
+    """
+    if not _WINDOWS:
+        return [str(script), *args]
+    bash = shutil.which("bash")
+    if bash is None:
+        raise BashNotFound("bash is not on PATH; giml needs Git for Windows' Git Bash on Windows")
+    return [bash, str(script), *args]
+
+
+def native_argv(resolved: str, args: Sequence[str]) -> list[str]:
+    """argv to invoke whatever a ``shutil.which`` lookup resolved to, plus ``args``.
+
+    A native executable (``.exe`` on Windows, anything on POSIX) is run directly. On Windows, a
+    resolved ``.cmd``/``.bat`` (real Maven's ``mvn.cmd``, or a script-based tool's test double)
+    cannot be launched by ``CreateProcess`` under ``shell=False`` (``%1 is not a valid Win32
+    application``); giml requires Git for Windows there (a POSIX-compatible git is already a hard
+    requirement) and runs the POSIX sibling script of the same name through its bundled ``bash``
+    instead, via ``posix_script_argv``.
+    """
+    if not _WINDOWS or not resolved.lower().endswith((".cmd", ".bat")):
+        return [resolved, *args]
+    script = Path(resolved).with_suffix("")
+    if not script.is_file():
+        raise BashNotFound(f"{script} is missing; giml needs the POSIX script installed beside {resolved}")
+    return posix_script_argv(script, args)
 
 
 def popen_in_new_group(argv: list[str], **kwargs: object) -> subprocess.Popen:

@@ -1,4 +1,3 @@
-import stat
 import subprocess
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from giml.maven.cache import (
 )  # fmt: skip
 from giml.maven.failures import COMPILE, ENFORCER_CONVERGENCE, INFRASTRUCTURE, TIMEOUT, UNKNOWN, Failure
 from giml.store.result_cache import FileResultCache
+from tests.conftest import write_posix_script
 from tests.git.repo_helpers import git, make_repo
 
 ENV = BuildEnvironment(jdk="21.0.9", maven="3.9.11", tooling="tool-1", config_version=3)
@@ -94,11 +94,10 @@ def test_the_tooling_fingerprint_follows_the_pinned_versions():
 def test_maven_version_reads_the_first_line_of_mvn_version(tmp_path, monkeypatch):
     script = tmp_path / "bin" / "mvn"
     script.parent.mkdir()
-    script.write_text('#!/bin/sh\necho "Apache Maven 3.9.11 (3e54c93a704957b63ee3494413a2b544fd3d825b)"\necho "Java version: 21"\n')
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    write_posix_script(script, '#!/bin/sh\necho "Apache Maven 3.9.11 (3e54c93a704957b63ee3494413a2b544fd3d825b)"\necho "Java version: 21"\n')
     assert maven_version({"PATH": str(script.parent)}) == "3.9.11"
     assert maven_version({"PATH": str(tmp_path / "empty")}) == "unknown"
-    script.write_text("#!/bin/sh\nexit 3\n")
+    write_posix_script(script, "#!/bin/sh\nexit 3\n")
     assert maven_version({"PATH": str(script.parent)}) == "unknown"
 
 

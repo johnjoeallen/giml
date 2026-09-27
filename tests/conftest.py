@@ -1,9 +1,12 @@
 import http.server
 import os
+import stat
+import sys
 import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 from hypothesis import settings
@@ -31,6 +34,21 @@ def roomy_disk(request, monkeypatch):
     if request.node.get_closest_marker("real_space_check"):
         return
     monkeypatch.setattr("giml.maven.isolation.check_space", lambda path: None)
+
+
+def write_posix_script(path: Path, body: str) -> None:
+    """A ``#!/bin/sh`` fake executable, discoverable and runnable on every platform.
+
+    On POSIX the shebang and executable bit do the work. Windows has no shebang support and giml
+    requires Git Bash there (``giml.core.platform.posix_script_argv``/``native_argv``), which needs
+    ``shutil.which`` to find the command by its normal name first; a plain shell script with no
+    extension is invisible to Windows' PATHEXT search, so a ``.cmd`` sibling mirrors how the real
+    Apache Maven distribution ships both ``mvn`` and ``mvn.cmd`` side by side.
+    """
+    path.write_text(body)
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+    if sys.platform == "win32":
+        path.with_suffix(".cmd").write_text(f'@echo off\r\nbash "%~dp0{path.name}" %*\r\n')
 
 
 @dataclass

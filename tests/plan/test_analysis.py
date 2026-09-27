@@ -158,7 +158,8 @@ def test_dry_run_of_a_project_with_a_valid_tier(repo, tmp_path, store):
     assert report["summary"]["cve_affected"] == 1 and report["missing_metadata"] == []
     assert report["exposure"] == {"max_severity": "HIGH", "at_max": 1, "total": 1}
     # files, run record and cleanliness
-    assert json.loads(result.json_path.read_text()) == report and result.markdown_path.read_text().startswith("# giml dry run: proj")
+    assert json.loads(result.json_path.read_text(encoding="utf-8")) == report
+    assert result.markdown_path.read_text(encoding="utf-8").startswith("# giml dry run: proj")
     assert result.json_path == tmp_path / "state" / "reports" / result.run_id / "report.json"
     (run_record,) = [r for r in store.list_runs() if r.kind == "plan"]
     assert (run_record.id, run_record.stop_reason, run_record.branch) == (result.run_id, "dry_run", "")

@@ -1,6 +1,7 @@
 import datetime
 import hashlib
 import json
+import re
 
 import pytest
 
@@ -97,7 +98,7 @@ def test_manifest_is_complete_and_stably_formatted(tmp_path):
 
 def test_existing_snapshot_error_names_directory(tmp_path):
     info = write_snapshot(tmp_path)
-    with pytest.raises(FileExistsError, match=f"snapshot directory already exists: {info.path}"):
+    with pytest.raises(FileExistsError, match=f"snapshot directory already exists: {re.escape(str(info.path))}"):
         write_snapshot(tmp_path)
 
 

@@ -73,9 +73,10 @@ def test_a_usable_tier_plans_commits_the_fix_and_writes_the_report_files(tmp_pat
     assert result["committed"][0]["label"] == "o:lib 2.17.1 → 2.17.3 (cve_patch)" and result["enforcer_clean"] and result["left"] == []
     assert "<lib.version>2.17.3</lib.version>" in (ws.worktree / "core" / "pom.xml").read_text()
     assert git(ws.worktree, "log", "-1", "--format=%s") == "o:lib 2.17.1 → 2.17.3 (cve_patch)"
-    document = json.loads(run.json_path.read_text())
+    document = json.loads(run.json_path.read_text(encoding="utf-8"))
     assert document["kind"] == "plan" and document["result"]["branch"] == ws.branch and document["result"]["builds"] == 2  # the ladder trial and the strict check (this fake runner has no cache)
-    assert run.markdown_path.read_text().startswith("# giml plan: proj") and "## Analysis at the base commit" in run.markdown_path.read_text()
+    markdown = run.markdown_path.read_text(encoding="utf-8")
+    assert markdown.startswith("# giml plan: proj") and "## Analysis at the base commit" in markdown
     assert run.report["result"]["review"] == f"git diff {ws.repo.base_sha[:7]}..{ws.branch}"
 
 

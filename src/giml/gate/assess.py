@@ -18,6 +18,7 @@ from pathlib import Path
 
 from giml import workspace
 from giml.core.config import GateConfig, load_project_settings
+from giml.core.platform import native_argv
 from giml.maven.build import STAGES
 from giml.maven.failures import UNAVAILABLE
 from giml.smoke.runner import SmokeRunner
@@ -50,7 +51,7 @@ class UnknownTierError(ValueError):
 
 def run_java(args: list[str], timeout: float, env: Env = None) -> subprocess.CompletedProcess:
     java = shutil.which("java", path=(env or os.environ).get("PATH")) or "java"
-    return subprocess.run([java, *args], capture_output=True, text=True, timeout=timeout, check=False,
+    return subprocess.run(native_argv(java, args), capture_output=True, text=True, timeout=timeout, check=False,
                           env=dict(env) if env is not None else None)  # fmt: skip
 
 

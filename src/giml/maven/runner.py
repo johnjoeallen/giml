@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from giml.core.platform import popen_in_new_group, terminate_process_tree
+from giml.core.platform import BashNotFound, native_argv, popen_in_new_group, terminate_process_tree
 
 _TERMINATE_GRACE_SECONDS = 10
 
@@ -52,7 +52,10 @@ def run_maven(
     mvn = shutil.which("mvn", path=(env or os.environ).get("PATH"))
     if mvn is None:
         raise MavenNotFound("mvn is not on PATH; giml needs a working Maven installation")
-    command = [mvn, "-B", "-ntp", *args]
+    try:
+        command = native_argv(mvn, ["-B", "-ntp", *args])
+    except BashNotFound as exc:
+        raise MavenNotFound(str(exc)) from exc
     log_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     timed_out = False

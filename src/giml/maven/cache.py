@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from giml.core.interfaces import BuildRunner, ResultCache
+from giml.core.platform import BashNotFound, native_argv
 from giml.gate.setup import tooling
 from giml.git.runner import Git
 from giml.maven.build import StageOutcome
@@ -55,7 +56,11 @@ def maven_version(environ: Mapping[str, str]) -> str:
     mvn = shutil.which("mvn", path=environ.get("PATH", ""))
     if mvn is None:
         return "unknown"
-    result = subprocess.run([mvn, "--version"], capture_output=True, text=True, timeout=60, check=False, env=dict(environ))
+    try:
+        command = native_argv(mvn, ["--version"])
+    except BashNotFound:
+        return "unknown"
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False, env=dict(environ))
     match = _MAVEN_VERSION.search(result.stdout) if result.returncode == 0 else None
     return match.group(1) if match else "unknown"
 

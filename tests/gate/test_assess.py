@@ -5,6 +5,7 @@ The real tools run in tests/gate/test_assess_maven.py (slow).
 
 import datetime
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,6 +18,7 @@ from giml.gate.assess import PrerequisiteError, UnknownTierError, assess, run_ja
 from giml.maven.isolation import InsufficientSpace
 from giml.maven.runner import MavenResult
 from giml.store.sqlite_store import SqliteStateStore
+from tests.conftest import write_posix_script
 from tests.git.repo_helpers import fingerprint, git, make_repo
 from tests.maven.test_jdk import make_catalog, make_jdk
 
@@ -256,11 +258,12 @@ def test_project_settings_choose_the_jdk_for_maven_and_java(repo, tmp_path):
 
 
 def test_settings_are_read_from_the_base_commit_not_the_checkout(repo, tmp_path):
-    commit_settings(repo, "java_home: /nowhere/jdk\n")
+    nowhere = tmp_path / "nowhere" / "jdk"
+    commit_settings(repo, f"java_home: {nowhere.as_posix()}\n")
     # Delete it from the checkout, hidden from preflight's dirty check: giml must still see the committed file.
     git(repo, "update-index", "--assume-unchanged", ".giml/settings.yml")
     (repo / ".giml" / "settings.yml").unlink()
-    with pytest.raises(ConfigError, match=r"java_home /nowhere/jdk is not a JDK"):
+    with pytest.raises(ConfigError, match=rf"java_home {re.escape(str(nowhere))} is not a JDK"):
         run(repo, tmp_path)
 
 
@@ -287,8 +290,7 @@ def test_cli_config_flag_supplies_the_jdk_list(repo, tmp_path, capsys):
 def test_run_java_uses_the_java_on_the_given_path(tmp_path):
     bin_dir = tmp_path / "jdk" / "bin"
     bin_dir.mkdir(parents=True)
-    (bin_dir / "java").write_text('#!/bin/sh\necho "java $JAVA_HOME $*"\n')
-    (bin_dir / "java").chmod(0o755)
+    write_posix_script(bin_dir / "java", '#!/bin/sh\necho "java $JAVA_HOME $*"\n')
     result = run_java(["-version"], 10, {"PATH": str(bin_dir), "JAVA_HOME": "/j"})
     assert (result.returncode, result.stdout) == (0, "java /j -version\n")
     assert result.args[0] == str(bin_dir / "java")

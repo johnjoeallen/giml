@@ -1,11 +1,11 @@
 import os
-import stat
-import subprocess
 import time
 
 import pytest
 
 from giml.maven.runner import MavenNotFound, run_maven
+from tests.conftest import write_posix_script
+from tests.process_liveness import pid_alive
 
 FAKE_MVN = """#!/bin/sh
 echo "args: $*"
@@ -24,8 +24,7 @@ def fake_mvn(tmp_path, monkeypatch):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     mvn = bin_dir / "mvn"
-    mvn.write_text(FAKE_MVN)
-    mvn.chmod(mvn.stat().st_mode | stat.S_IEXEC)
+    write_posix_script(mvn, FAKE_MVN)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     return mvn
 
@@ -55,19 +54,9 @@ def test_timeout_kills_the_whole_process_group(fake_mvn, tmp_path):
     assert "timed out after 0.5s; process group killed" in (tmp_path / "s.log").read_text()
     pid = int(child_pid.read_text())
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and _alive(pid):
+    while time.monotonic() < deadline and pid_alive(pid):
         time.sleep(0.05)
-    assert not _alive(pid)  # the backgrounded child died with the group
-
-
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    # A killed child of an exited parent may linger as a zombie until reaped by init.
-    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
-    return bool(state) and not state.startswith("Z")
+    assert not pid_alive(pid)  # the backgrounded child died with the group
 
 
 def test_processes_left_behind_by_a_finished_build_are_killed(fake_mvn, tmp_path):
@@ -77,9 +66,9 @@ def test_processes_left_behind_by_a_finished_build_are_killed(fake_mvn, tmp_path
     assert result.succeeded
     pid = int(child_pid.read_text())
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and _alive(pid):
+    while time.monotonic() < deadline and pid_alive(pid):
         time.sleep(0.05)
-    assert not _alive(pid)
+    assert not pid_alive(pid)
 
 
 def test_missing_maven_is_reported(tmp_path):

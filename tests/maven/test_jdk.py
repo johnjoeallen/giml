@@ -84,9 +84,9 @@ def test_equal_versions_keep_the_first_listed(tmp_path):
 
 
 def test_configured_entries_must_be_jdks_with_a_version(tmp_path):
-    with pytest.raises(ConfigError, match=r"config\.yml: jdks: .*/jre is not a JDK \(no bin/javac\)"):
+    with pytest.raises(ConfigError, match=r"config\.yml: jdks: .*jre is not a JDK \(no bin/javac\)"):
         make_catalog(tmp_path, [make_jdk(tmp_path / "jre", "17", javac=False)]).find("17")
-    with pytest.raises(ConfigError, match=r"config\.yml: jdks: .*/bare has no JAVA_VERSION"):
+    with pytest.raises(ConfigError, match=r"config\.yml: jdks: .*bare has no JAVA_VERSION"):
         make_catalog(tmp_path, [make_jdk(tmp_path / "bare")]).find("17")
 
 
@@ -150,7 +150,7 @@ def test_settings_java_home_is_used_when_it_has_javac(tmp_path):
 
 def test_settings_java_home_without_javac_is_refused(tmp_path):
     settings = ProjectSettings(tmp_path / "settings.yml", java_home=make_jdk(tmp_path / "jre", "17", javac=False))
-    with pytest.raises(ConfigError, match=r"settings\.yml: java_home .*/jre is not a JDK \(no bin/javac\)"):
+    with pytest.raises(ConfigError, match=r"settings\.yml: java_home .*jre is not a JDK \(no bin/javac\)"):
         resolve_jdk(settings, make_catalog(tmp_path), {})
 
 

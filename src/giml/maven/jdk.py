@@ -45,7 +45,8 @@ class Jdk:
 
 
 def looks_like_jdk(home: Path) -> bool:
-    return (home / "bin" / "javac").is_file()
+    javac = home / "bin" / "javac"
+    return javac.is_file() or javac.with_suffix(".exe").is_file()
 
 
 def release_version(home: Path) -> str | None:
