@@ -8,9 +8,12 @@ GiML takes its idea of gated, verified upgrades from
 favour of a fully automated flow: run it in the application's own folder and
 it plans, builds, and verifies candidate upgrades itself, leaving the result
 on a local branch for the developer to review. Where a joint upgrade is
-blocked by dependency convergence, an ML layer is planned to help decide how
-to proceed (see [Roadmap](#roadmap)) — deterministic verification is always
-the source of truth, ML is only ever a prior.
+blocked by dependency convergence, an ML layer is planned to guide the
+decision (see [Roadmap](#roadmap)) — but the build can still come out
+blocked after the ML stage, and the developer then intervenes manually. Once
+they resolve it, that outcome feeds back so the ML layer learns from it.
+Deterministic verification is always the source of truth; ML is only ever a
+guide, never a verdict.
 
 GiML never pushes and never opens a pull request.
 
@@ -112,7 +115,10 @@ triage aid, never a precondition:
   per accepted upgrade,
 - assistance when a joint upgrade is blocked by dependency convergence:
   suggesting which side of the conflict to move, informed by past
-  transitions, always verified by a real build before being kept.
+  transitions, always verified by a real build before being kept. If the
+  build is still blocked after that guidance, the developer resolves it
+  manually, and that resolution becomes a new example the ML layer learns
+  from.
 
 ## License
 
