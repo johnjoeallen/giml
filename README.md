@@ -1,7 +1,7 @@
 # GiML
 
 **G**ated **I**ncrements (**ML**) — a local, report-only CLI that plans and
-verifies joint Maven dependency upgrades for a git project.
+verifies joint Maven dependency upgrades for a Java project.
 
 GiML takes its idea of gated, verified upgrades from
 [RedKite](https://github.com/johnjoeallen/redkite), but drops RedKite's UI in
