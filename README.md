@@ -118,7 +118,14 @@ triage aid, never a precondition:
   transitions, always verified by a real build before being kept. If the
   build is still blocked after that guidance, the developer resolves it
   manually, and that resolution becomes a new example the ML layer learns
-  from.
+  from,
+- a central learning store shared across runs and projects, recording both
+  successful and failed build outcomes as examples — including a
+  convergence block together with the fix the developer applied for it —
+  so later runs (on this project or another) benefit from what earlier ones
+  learned. Design open: where the store lives, what is shared beyond one
+  machine, and what must be scrubbed before anything is written to it
+  (hard rules 4 and 6 apply in full).
 
 ## License
 
