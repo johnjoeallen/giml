@@ -38,10 +38,12 @@ Enforced by code and tests, not just convention (full detail in
 
 ## Requirements
 
-- Linux, macOS or Windows. Windows and macOS are verified in CI
-  (`.github/workflows/tests.yml`, `docs/platform.md`); the run lock, hook
-  disabling, process-tree kill and free-space check each have a
-  platform-specific implementation behind `giml.core.platform`.
+- Linux or macOS, both verified in CI (`.github/workflows/tests.yml`). Windows
+  support is in progress: the run lock, hook disabling, process-tree kill,
+  free-space check and tmpdir-quoting each have a Windows implementation
+  behind `giml.core.platform`, but the wider test suite isn't green on
+  Windows yet (test-infrastructure and path-validation gaps, not core
+  giml behaviour) — see `docs/platform.md` for the tracked specifics.
 - Python >= 3.12
 - Java + Maven (a working `mvn` on `PATH`, or a project-specific JDK
   configured per `docs/platform.md`)
@@ -55,7 +57,7 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 ```
 
-On Windows (PowerShell):
+On Windows (PowerShell) — install works, but see the caveat above:
 
 ```powershell
 python -m venv .venv
