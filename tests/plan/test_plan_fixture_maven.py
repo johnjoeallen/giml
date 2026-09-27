@@ -7,9 +7,7 @@ Lib.hello(); 1.1.0 and 1.2.0 renamed it, so the application no longer compiles a
 
 import datetime
 import json
-import os
 import re
-import pwd
 import shutil
 import subprocess
 from pathlib import Path
@@ -33,9 +31,13 @@ VERSIONS = ["1.0.0", "1.0.1", "1.0.2", "1.1.0", "1.2.0", "2.0.0"]
 WHEN = datetime.datetime(2020, 1, 1, tzinfo=datetime.UTC)
 
 
+# Captured at import time, before any test's autouse fixture can monkeypatch HOME.
+_REAL_HOME = Path.home()
+
+
 @pytest.fixture
 def real_home(monkeypatch):
-    monkeypatch.setenv("HOME", str(Path(pwd.getpwuid(os.getuid()).pw_dir)))
+    monkeypatch.setenv("HOME", str(_REAL_HOME))
 
 
 def lib_source(version: str) -> str:

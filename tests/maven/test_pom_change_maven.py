@@ -1,7 +1,5 @@
 """Edited POMs mean what they say to real Maven (slow). Run with `pytest -m slow`."""
 
-import os
-import pwd
 import shutil
 from pathlib import Path
 
@@ -39,9 +37,13 @@ POM = """<project xmlns="http://maven.apache.org/POM/4.0.0">
 """
 
 
+# Captured at import time, before any test's autouse fixture can monkeypatch HOME.
+_REAL_HOME = Path.home()
+
+
 @pytest.fixture
 def real_home(monkeypatch):
-    monkeypatch.setenv("HOME", str(Path(pwd.getpwuid(os.getuid()).pw_dir)))
+    monkeypatch.setenv("HOME", str(_REAL_HOME))
 
 
 def resolved(tmp_path, pom):

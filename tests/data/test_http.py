@@ -1,4 +1,7 @@
 import datetime
+import errno
+import os
+import re
 
 import pytest
 
@@ -90,7 +93,9 @@ def test_default_timeout_is_sixty_seconds():
 
 
 def test_connection_refused_reason_is_reported():
-    with pytest.raises(FetchError, match=r"^http://127.0.0.1:9/x: \[Errno 111\] Connection refused$"):
+    # The errno and OS message text for "connection refused" differ by platform (Linux 111, macOS 61).
+    reason = re.escape(os.strerror(errno.ECONNREFUSED))
+    with pytest.raises(FetchError, match=rf"^http://127.0.0.1:9/x: \[Errno {errno.ECONNREFUSED}\] {reason}$"):
         UrlLibFetcher(timeout_seconds=2).get_text("http://127.0.0.1:9/x")
 
 

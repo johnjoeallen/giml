@@ -1,8 +1,6 @@
 """`giml plan` verifies the baseline with real Maven (slow). Run with `pytest -m slow`."""
 
 import json
-import os
-import pwd
 import shutil
 from pathlib import Path
 
@@ -17,11 +15,14 @@ pytestmark = pytest.mark.slow
 
 MINI = Path(__file__).resolve().parents[1] / "fixtures" / "maven" / "mini-reactor"
 
+# Captured at import time, before any test's autouse fixture can monkeypatch HOME.
+_REAL_HOME = Path.home()
+
 
 @pytest.fixture
 def real_home(monkeypatch):
     # Maven must use the developer's real ~/.m2 (spec 9.2); the autouse isolated HOME would re-download every plugin.
-    monkeypatch.setenv("HOME", str(Path(pwd.getpwuid(os.getuid()).pw_dir)))
+    monkeypatch.setenv("HOME", str(_REAL_HOME))
 
 
 class CountingMaven:

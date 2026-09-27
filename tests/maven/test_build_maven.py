@@ -1,7 +1,6 @@
 """The stage runner with real Maven (slow: starts mvn and needs the plugins). Run with `pytest -m slow`."""
 
 import os
-import pwd
 import shutil
 from pathlib import Path
 
@@ -19,11 +18,14 @@ POM = ('<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</
        "<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties></project>\n")
 SOURCE = "package t;\npublic class App {\n  int f() { return undefinedSymbol; }\n}\n"
 
+# Captured at import time, before any test's autouse fixture can monkeypatch HOME.
+_REAL_HOME = Path.home()
+
 
 @pytest.fixture
 def real_home(monkeypatch):
     # Maven must use the developer's real ~/.m2 (spec 9.2); the autouse isolated HOME would re-download every plugin.
-    monkeypatch.setenv("HOME", str(Path(pwd.getpwuid(os.getuid()).pw_dir)))
+    monkeypatch.setenv("HOME", str(_REAL_HOME))
 
 
 def broken_project(root: Path) -> Path:
