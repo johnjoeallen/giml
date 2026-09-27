@@ -67,6 +67,18 @@ tests fail at the base commit.
 build logs; `<state>/cache/` the content-addressed stage cache (a repeated identical run is answered from it).
 `docs/platform.md` explains how giml stays out of your checkout.
 
+**Logs persist.** Every stage of every attempt — the baseline and every trial the planner built, one build
+per candidate the search actually tried — writes its own log file under `<state>/runs/<run-id>/logs/`, and
+giml never deletes them: not on a cache hit (which writes its own small pointer log instead of skipping the
+file), not when `giml clean` removes the worktree that produced them, and not when a later run reuses the
+same project. A stage that failed for an infrastructure reason and was retried still leaves its own log on
+disk, even though the retried attempt is not logged as a training example (spec 15: it says nothing about the
+project). This is deliberate: collecting real failures (for example from projects with known CVEs or known
+build issues) across many runs is how the ML layers (spec section 16) get a corpus bigger than giml's own
+fixture logs. `giml export-examples --out FILE` exports one JSON line per logged example; its `features.log_path`
+points at the exact log file the example came from. giml never prunes the state directory itself, so its size
+is yours to manage.
+
 ## Testing giml
 
 `.venv/bin/pytest` (fast), `.venv/bin/pytest -m slow` (real Maven, javac, a JVM and, with docker, a throwaway

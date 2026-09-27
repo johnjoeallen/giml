@@ -50,8 +50,8 @@ def _features(stage: StageBaseline, tier: str | None, oracle: dict[str, float] |
     outcome = stage.outcome
     return {"kind": "baseline", "stage": stage.stage, "failure_class": outcome.failure_class, "signature": outcome.signature,
             "key_lines": list(outcome.failure.key_lines) if outcome.failure else [],
-            "duration_seconds": outcome.duration_seconds, "cache_hit": outcome.cache_hit, "retries": stage.attempts - 1,
-            "tier": tier, "oracle": oracle,
+            "log_path": str(outcome.log_path), "duration_seconds": outcome.duration_seconds, "cache_hit": outcome.cache_hit,
+            "retries": stage.attempts - 1, "tier": tier, "oracle": oracle,
             "rewind": {"is_rewind": rewind is not None, "commit": rewind.commit if rewind else None,
                        "commit_date": rewind.commit_date if rewind else None},
             "jdk": jdk, "violations": [v.identity for v in outcome.violations]}  # fmt: skip
@@ -108,7 +108,8 @@ def log_trial(store: StateStore, run_id: str, project_id: str, number: int, chan
                                               round(outcome.duration_seconds * 1000), str(outcome.log_path)))  # fmt: skip
         features = {"kind": "candidate", "stage": outcome.stage, "changes": changes, "failure_class": outcome.failure_class,
                     "signature": outcome.signature, "key_lines": list(outcome.failure.key_lines) if outcome.failure else [],
-                    "duration_seconds": outcome.duration_seconds, "cache_hit": outcome.cache_hit, "tier": tier, "oracle": oracle,
+                    "log_path": str(outcome.log_path), "duration_seconds": outcome.duration_seconds, "cache_hit": outcome.cache_hit,
+                    "tier": tier, "oracle": oracle,
                     "jdk": jdk, "new_violations": [v.identity for v in result.new_violations]}  # fmt: skip
         dedup = hashlib.sha256(canonical_json({"scope": "candidate", "project": project_id, "stage": outcome.stage, "outcome": label,
                                                "signature": outcome.signature, "changes": changes}).encode()).hexdigest()  # fmt: skip

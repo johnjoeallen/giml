@@ -155,3 +155,60 @@ def test_a_stale_snapshot_is_warned_about_in_the_report_and_the_cache_figures_ar
     cache = report["result"]["cache"]
     assert cache["hits"] == 0 and cache["misses"] >= 6 and cache["seconds_spent"] >= 6.0  # the baseline's 3 stages and the trials' builds
     assert "cache (baseline and trials): 0 hit(s)," in __import__("giml.plan.planner", fromlist=["x"]).render_plan_summary(report)
+
+
+class WritingMaven:
+    """A real MavenResult-returning callable: every call writes its own call number into the log path it is given
+    (the real MavenBuildRunner, not a fake, decides that path), so a silent overwrite would leave a mismatch."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, project, args, log, timeout, env):
+        from giml.maven.runner import MavenResult
+
+        self.calls += 1
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(f"[INFO] BUILD SUCCESS (call {self.calls}, goal {args[0]})\n")
+        return MavenResult(tuple(args), 0, 0.1, log, False)
+
+
+def test_every_attempts_log_is_its_own_file_none_overwritten_across_the_run(tmp_path, repo):  # noqa: F811
+    """The real MavenBuildRunner is reused across the baseline and every trial (one growing counter, spec 9.1);
+    each numbered log still holds exactly its own attempt's content after the whole plan has run."""
+    from giml.maven.build import MavenBuildRunner
+    from giml.maven.cache import CachingBuildRunner
+    from giml.store.result_cache import FileResultCache
+
+    state = tmp_path / "state"
+    store = SqliteStateStore(state / "state.db")
+    store.record_snapshot(snapshot("osv"))
+    store.record_snapshot(snapshot("central"))
+    assess_result(store, repo)
+    maven = WritingMaven()
+    holder = []
+
+    def verify(ws, temp):
+        logs_dir = state / "runs" / ws.run_id / "logs"
+        runner = CachingBuildRunner(MavenBuildRunner(maven, {}, logs_dir), FileResultCache(state / "cache"),
+                                    lambda worktree, stage: {"worktree": str(worktree), "stage": stage}, logs_dir)  # fmt: skip
+        baseline = verify_baseline(runner, ws.worktree, 60)
+        log_baseline(store, ws.run_id, ws.repo.project_key, baseline, tier="A", oracle=None, rewind=None, jdk="17")
+        baseline_run = BaselineRun(baseline, {}, state / "b.json", None, runner, Jdk(None, "17", "inherited"), {})
+        holder.append(run_planning(ws, baseline_run, state, store, CONFIG, CONFIG.planning, FakeMaven(), SOURCES, lambda: NOW, NoJava(),
+                                   compare_naive_bumps=True))  # fmt: skip
+        return holder[0].stop_reason
+
+    ws = workspace.set_up(repo, state, store, lambda: NOW, verify=verify)
+    logs_dir = state / "runs" / ws.run_id / "logs"
+    stage_suffixes = ("compile", "unit_test", "enforcer", "integration", "startup", "pit", "package")
+    numbered = sorted(p for p in logs_dir.glob("*.log")
+                      if p.stem.split("-", 1)[0].isdigit() and p.stem.rsplit("-", 1)[-1] in stage_suffixes)  # fmt: skip
+    assert len(numbered) == maven.calls >= 4  # baseline's 3 stages plus at least one trial build; one file per call
+    for path in numbered:
+        expected_call = int(path.stem.split("-", 1)[0])
+        assert f"call {expected_call}," in path.read_text()  # still this attempt's own content, not a later one's
+    for attempt in store.list_attempts(ws.run_id):
+        if attempt.stage == "exposure":  # a resolved-tree check, no build, no log file (spec 8.5)
+            continue
+        assert Path(attempt.log_path).is_file() and Path(attempt.log_path).parent == logs_dir

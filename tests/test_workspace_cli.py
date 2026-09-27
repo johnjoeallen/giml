@@ -385,3 +385,35 @@ def test_lfs_content_is_never_fetched_in_giml_worktrees(tmp_path, cli, capsys):
     assert cli("clean", repo, "--branches") == ExitCode.SUCCESS
     assert not marker.exists()
     assert fingerprint(repo) == before
+
+
+def test_clean_never_touches_a_runs_logs_even_with_branches(repo, cli, capsys):
+    """A run's attempt logs are how known-bad transitions get diagnosed later; `clean` must never remove them."""
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT
+    capsys.readouterr()
+    with store(cli) as s:
+        (run,) = s.list_runs()
+    logs_dir = cli.state / "runs" / run.id / "logs"
+    before = sorted(p.name for p in logs_dir.glob("*.log"))
+    assert before  # the baseline stages did write logs
+
+    assert cli("clean", repo, "--branches") == ExitCode.SUCCESS
+
+    assert logs_dir.is_dir() and sorted(p.name for p in logs_dir.glob("*.log")) == before
+    for name in before:
+        assert (logs_dir / name).read_text()  # still readable, not truncated
+
+
+def test_clean_all_projects_still_leaves_every_projects_logs_in_place(repo, cli, tmp_path, capsys):
+    other = make_repo(tmp_path / "other")
+    commit_files(other, {"pom.xml": SINGLE_POM.format(version="2.18.4")}, "fixture")
+    assert cli("plan", repo) == ExitCode.NO_IMPROVEMENT and cli("plan", other) == ExitCode.NO_IMPROVEMENT
+    capsys.readouterr()
+    with store(cli) as s:
+        runs = s.list_runs()
+    log_dirs = [cli.state / "runs" / r.id / "logs" for r in runs]
+    assert all(d.glob("*.log") for d in log_dirs)
+
+    assert cli("clean", "--all") == ExitCode.SUCCESS
+
+    assert all(d.is_dir() and list(d.glob("*.log")) for d in log_dirs)

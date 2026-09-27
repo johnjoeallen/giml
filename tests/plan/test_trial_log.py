@@ -74,3 +74,10 @@ def test_passes_combinations_and_environment_failures_teach_nothing_about_transi
 def test_a_step_without_a_known_version_move_is_not_a_transition(store):
     outcome = result(stage("compile", False, FAILURE), failure=FAILURE)
     assert log(store, [{**LIB, "from": None, "to": None}], outcome) == []
+
+
+def test_a_logged_candidate_examples_features_carry_the_real_log_path_so_it_can_be_found_again(store):
+    outcome = result(stage("compile"), stage("unit_test", False, FAILURE), stage_name="unit_test", failure=FAILURE)
+    log(store, [LIB], outcome)
+    labelled = next(e for e in store.list_examples() if e.id.endswith("trial-001:unit_test"))
+    assert json.loads(labelled.features_json)["log_path"] == "/logs/x.log"

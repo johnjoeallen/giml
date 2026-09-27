@@ -58,8 +58,9 @@ def test_a_passing_baseline_logs_a_state_an_attempt_per_stage_and_examples(store
     assert [e.id for e in examples] == ["run1:compile", "run1:enforcer", "run1:unit_test"] and {e.split_group for e in examples} == {"proj"}
     features, label = json.loads(examples[0].features_json), json.loads(examples[0].label_json)
     assert features == {"kind": "baseline", "stage": "compile", "failure_class": None, "signature": None, "key_lines": [],
-                        "duration_seconds": 1.5, "cache_hit": False, "retries": 0, "tier": None, "oracle": None,
-                        "rewind": {"is_rewind": False, "commit": None, "commit_date": None}, "jdk": "21.0.9", "violations": []}  # fmt: skip
+                        "log_path": "/logs/x.log", "duration_seconds": 1.5, "cache_hit": False, "retries": 0, "tier": None,
+                        "oracle": None, "rewind": {"is_rewind": False, "commit": None, "commit_date": None}, "jdk": "21.0.9",
+                        "violations": []}  # fmt: skip
     assert label == {"stage": "compile", "outcome": "pass", "failure_class": None}
 
 

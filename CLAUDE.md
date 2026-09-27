@@ -123,6 +123,8 @@ Newest first. One line each: date, decision, reason.
 
 ## Gotchas
 
+- `giml clean` touches only `<state>/worktrees` and branches; it never removes `<state>/runs/*/logs`, and neither does anything else giml does (locked in by tests). Every real stage attempt gets its own numbered log file from a single, reused build-runner instance per run (baseline and every trial share it), so numbering never restarts mid-run and nothing is silently overwritten. Logged examples now carry `features.log_path`, so `giml export-examples` output can be joined back to the real log text.
+
 - A JVM takes `user.home` from the password database, not `$HOME`: the startup runner passes `-Duser.home=<ephemeral dir>` (found 2026-09-26 when redkite's first startup run opened the developer's real `~/.redkite/redkite.mv.db` and read its `redkite.properties`; the file's mtime changed and a `redkite.trace.db` was written before the fix; later runs leave it untouched, checked by mtime and size). Cached results from before that fix were invalidated (cache schema 4).
 - Redkite's startup settings (scratch clones): `smoke.artifact: red-kite-server/target/red-kite-*.jar`, `properties: {redkite.port: ${PORT}}`, `ready: {http: /health, contains: ok}`; it needs no profile and no database provisioning (H2 file under the ephemeral home). The app binds all interfaces, so giml cannot enforce loopback for a non-Spring application. Real result: startup passes at the baseline for both the current and the behind redkite, and in the trials of the latest+general plan (5 steps, 9 min with PIT off).
 
