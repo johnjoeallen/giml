@@ -1,5 +1,4 @@
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -42,7 +41,7 @@ def test_lock_held_by_another_process_is_released_when_it_dies(tmp_path):
         with pytest.raises(LockHeld, match=rf"pid {child.pid}"):
             ProjectLock(tmp_path, "proj").acquire()
     finally:
-        child.send_signal(signal.SIGKILL)
+        child.kill()
         child.wait()
     deadline = time.monotonic() + 5
     while is_locked(tmp_path, "proj") and time.monotonic() < deadline:

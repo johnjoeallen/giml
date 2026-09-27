@@ -5,7 +5,6 @@ import datetime
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 
@@ -181,7 +180,7 @@ def test_setup_failure_is_recorded_and_branch_never_overwritten(repo, cli, capsy
 
 
 CRASHING_RUN = """
-import os, signal, sys, datetime
+import os, sys, datetime
 from pathlib import Path
 from giml import workspace
 from giml.git.worktrees import WorktreeManager
@@ -190,7 +189,7 @@ from giml.store.sqlite_store import SqliteStateStore
 original = WorktreeManager.create_result
 def create_then_die(self, branch):
     path = original(self, branch)
-    os.kill(os.getpid(), signal.SIGKILL)  # crash after the worktree exists, before the run finishes
+    os._exit(1)  # crash after the worktree exists, before the run finishes: no cleanup, no atexit
 WorktreeManager.create_result = create_then_die
 with SqliteStateStore(Path(sys.argv[2]) / "state.db") as store:
     workspace.set_up(Path(sys.argv[1]), Path(sys.argv[2]), store, lambda: datetime.datetime.now(datetime.UTC))
@@ -200,7 +199,7 @@ with SqliteStateStore(Path(sys.argv[2]) / "state.db") as store:
 def test_crashed_run_is_detected_reported_and_cleanable(repo, cli, capsys):
     before = fingerprint(repo)
     child = subprocess.run([sys.executable, "-c", CRASHING_RUN, str(repo), str(cli.state)], capture_output=True)
-    assert child.returncode == -signal.SIGKILL
+    assert child.returncode == 1
     with store(cli) as s:
         [crashed] = s.list_runs(unfinished_only=True)
     assert crashed.worktree_path.exists()

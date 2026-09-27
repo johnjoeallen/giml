@@ -29,6 +29,12 @@ What giml needs from the machine it runs on, and what is and is not supported.
   `-Djava.io.tmpdir=` value passed through `JAVA_TOOL_OPTIONS` is quoted when needed. Verified
   against a real JDK, not just asserted (`tests/maven/test_isolation_java.py`, run in CI on all
   three OSes since it needs a real `java` on `PATH`).
+- Known gap: `tests/smoke/test_runner_real.py` (real JVM, real grandchild process, `-m slow`) is
+  Linux-only, not just POSIX — it launches a real `sleep 300` grandchild and reads
+  `/proc/<pid>/stat` to poll liveness, neither of which exists on Windows or macOS. It is not run
+  by `.github/workflows/tests.yml` (which only runs the fast suite plus the one targeted real-JDK
+  isolation test) and is not yet made portable; the process-tree-kill *logic* it exercises is
+  covered cross-platform by `tests/core/test_platform.py`'s faked-Windows-branch tests instead.
 
 ## How giml stays out of the developer's way
 

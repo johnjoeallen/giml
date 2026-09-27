@@ -43,7 +43,7 @@ class Launcher:
 
 @pytest.fixture(autouse=True)
 def no_real_kill(monkeypatch):
-    monkeypatch.setattr("os.killpg", lambda pid, sig: None)
+    monkeypatch.setattr("giml.smoke.runner.terminate_process_tree", lambda process, grace_seconds: None)
 
 
 def jar(tmp_path, name="app.jar", main=True):
