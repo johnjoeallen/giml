@@ -116,6 +116,12 @@ def _error_lines(log_text: str) -> list[str]:
     return found
 
 
+def error_text(log_text: str) -> str:
+    """The log's own [ERROR] lines, normalised and joined: the shared input for the rule-based classifier's key
+    lines and for a trained one (spec section 16, layer 1); independent of any class."""
+    return "\n".join(_error_lines(log_text))
+
+
 def _canonical_duplicates(lines: list[str]) -> list[str]:
     """BanDuplicateClasses lists the offending artifacts and classes in no fixed order; sort them."""
     if "Found in:" not in lines or "Duplicate classes:" not in lines:
