@@ -19,6 +19,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from giml.core.platform import free_space
+
 MIN_FREE_BYTES = 512 * 1024 * 1024  # a worktree, PIT reports and build output for a real project
 MIN_FREE_INODES = 20_000  # a test run that leaks temp directories can create tens of thousands
 
@@ -39,12 +41,11 @@ class TempStats:
 
 def check_space(path: Path, min_bytes: int = MIN_FREE_BYTES, min_inodes: int = MIN_FREE_INODES) -> None:
     """Raise InsufficientSpace unless ``path``'s filesystem has room. Inodes are skipped where not counted."""
-    stat = os.statvfs(path)
-    free = stat.f_bavail * stat.f_frsize
-    if free < min_bytes:
-        raise InsufficientSpace(f"{path}: only {free // 2**20} MB free on this filesystem, need {min_bytes // 2**20} MB")
-    if stat.f_files and stat.f_favail < min_inodes:
-        raise InsufficientSpace(f"{path}: only {stat.f_favail} inodes free on this filesystem, need {min_inodes}")
+    space = free_space(path)
+    if space.bytes < min_bytes:
+        raise InsufficientSpace(f"{path}: only {space.bytes // 2**20} MB free on this filesystem, need {min_bytes // 2**20} MB")
+    if space.inodes is not None and space.inodes < min_inodes:
+        raise InsufficientSpace(f"{path}: only {space.inodes} inodes free on this filesystem, need {min_inodes}")
 
 
 class RunTemp:
@@ -88,13 +89,14 @@ def isolated_env(jdk_env: Mapping[str, str] | None, environ: Mapping[str, str], 
     """The environment for every Maven and java call: the chosen JDK's (or the inherited one) plus the temp directory.
 
     JAVA_TOOL_OPTIONS reaches every JVM, including Surefire forks and PIT minions, without touching the
-    project's own ``argLine`` (JaCoCo sets that). Options the developer already has are kept.
+    project's own ``argLine`` (JaCoCo sets that). Options the developer already has are kept. A path
+    containing whitespace (common on Windows, e.g. ``C:\\Users\\Jane Doe\\...``) is quoted: the JDK's
+    environment-variable option parser honours quoted tokens (verified in CI, see
+    ``tests/maven/test_isolation_java.py``).
     """
-    if _WHITESPACE.search(str(temp.path)):
-        raise ValueError(f"the run's temp directory {temp.path} contains whitespace, which JAVA_TOOL_OPTIONS cannot carry; "
-                         "use a state directory without spaces")  # fmt: skip
     env = dict(jdk_env if jdk_env is not None else environ)
-    option = f"-Djava.io.tmpdir={temp.path}"
+    tmpdir = f'"{temp.path}"' if _WHITESPACE.search(str(temp.path)) else str(temp.path)
+    option = f"-Djava.io.tmpdir={tmpdir}"
     existing = env.get("JAVA_TOOL_OPTIONS")
     env["JAVA_TOOL_OPTIONS"] = f"{existing} {option}" if existing else option
     env["TMPDIR"] = str(temp.path)

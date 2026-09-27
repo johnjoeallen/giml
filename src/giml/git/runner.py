@@ -3,8 +3,8 @@
 Every command goes through ``Git.run``, which:
   * allows only an explicit set of local subcommands, and rejects ``push`` (and everything else)
     before any process starts;
-  * disables hooks for every invocation with ``-c core.hooksPath=/dev/null``, so no repository
-    hook runs inside giml's worktrees and the shared git config is never modified;
+  * disables hooks for every invocation with ``-c core.hooksPath=<empty directory>``, so no
+    repository hook runs inside giml's worktrees and the shared git config is never modified;
   * scrubs ``GIT_*`` variables from the environment so the developer's shell cannot redirect git
     at another repository, index or work tree;
   * switches the Git LFS filter off for commands that write files into giml's worktrees, so LFS
@@ -18,6 +18,8 @@ import os
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+
+from giml.core.platform import no_hooks_path
 
 # Subcommand -> allowed first arguments (None: any). Everything here is local-only.
 _ALLOWED: dict[str, tuple[str, ...] | None] = {
@@ -92,7 +94,7 @@ class Git:
     ) -> subprocess.CompletedProcess[str]:
         check_allowed(subcommand, args)
         lfs_off = _NO_LFS if subcommand in _WRITES_FILES else ()
-        command = ["git", "-C", str(self.directory), "-c", f"core.hooksPath={os.devnull}", *lfs_off, subcommand, *args]
+        command = ["git", "-C", str(self.directory), "-c", f"core.hooksPath={no_hooks_path()}", *lfs_off, subcommand, *args]
         result = subprocess.run(command, capture_output=True, text=True, env=_clean_environment(env), check=False)
         if check and result.returncode != 0:
             raise GitError([subcommand, *args], result.returncode, result.stderr)

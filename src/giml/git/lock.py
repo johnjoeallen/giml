@@ -1,8 +1,8 @@
 """One giml run per project at a time (spec section 5.1).
 
-Uses ``fcntl.flock`` on ``<state>/locks/<project key>.lock``. The kernel releases the lock when the
-holding process exits for any reason, so a crashed run never leaves a stale lock behind. POSIX only
-(Linux and macOS); ``fcntl`` does not exist on Windows.
+Uses an OS-level exclusive lock (see ``giml.core.platform``) on ``<state>/locks/<project key>.lock``.
+The OS releases the lock when the holding process exits for any reason, so a crashed run never
+leaves a stale lock behind.
 
 The lock lives as long as the ``ProjectLock`` object: keep a reference (or use ``with``) for the
 whole run, because a garbage-collected lock closes its file and releases the lock.
@@ -10,9 +10,10 @@ whole run, because a garbage-collected lock closes its file and releases the loc
 
 from __future__ import annotations
 
-import fcntl
 import os
 from pathlib import Path
+
+from giml.core.platform import acquire_exclusive_lock, release_exclusive_lock
 
 
 class LockHeld(RuntimeError):
@@ -26,23 +27,21 @@ class ProjectLock:
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self.path.open("a+", encoding="utf-8")
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        handle = self.path.open("a+b")
+        if not acquire_exclusive_lock(handle):
             handle.seek(0)
-            holder = handle.read().strip() or "unknown"
+            holder = handle.read().decode("ascii", errors="replace").strip() or "unknown"
             handle.close()
             raise LockHeld(f"another giml run (pid {holder}) holds {self.path}") from None
         handle.seek(0)
         handle.truncate()
-        handle.write(str(os.getpid()))
+        handle.write(str(os.getpid()).encode("ascii"))
         handle.flush()
         self._handle = handle
 
     def release(self) -> None:
         if self._handle is not None:
-            fcntl.flock(self._handle, fcntl.LOCK_UN)
+            release_exclusive_lock(self._handle)
             self._handle.close()
             self._handle = None
 

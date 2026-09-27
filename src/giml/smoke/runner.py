@@ -15,7 +15,6 @@ import contextlib
 import os
 import re
 import shutil
-import signal
 import socket
 import subprocess
 import tempfile
@@ -27,6 +26,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 from giml.core.config import PLACEHOLDER, SmokeSettings
+from giml.core.platform import popen_in_new_group, terminate_process_tree
 from giml.maven.build import StageOutcome
 from giml.maven.failures import MIGRATION, STARTUP, UNAVAILABLE, Failure, failure_from_lines, normalise
 from giml.smoke.postgres import Connection, SchemaLifecycle, Unavailable, read_connection, trial_schema
@@ -43,11 +43,11 @@ Launch = Callable[[Sequence[str], Path, Mapping[str, str], Path], subprocess.Pop
 
 
 def default_launch(argv: Sequence[str], cwd: Path, env: Mapping[str, str], log: Path) -> subprocess.Popen:
-    """Start the application in its own session (so its whole process group can be killed), output to the log."""
+    """Start the application in its own group (so its whole process tree can be killed), output to the log."""
     handle = log.open("ab")
     try:
-        return subprocess.Popen(list(argv), cwd=cwd, env=dict(env), stdout=handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                start_new_session=True)  # fmt: skip
+        return popen_in_new_group(list(argv), cwd=cwd, env=dict(env), stdout=handle, stderr=subprocess.STDOUT,
+                                  stdin=subprocess.DEVNULL)  # fmt: skip
     finally:
         handle.close()
 
@@ -107,18 +107,11 @@ def classify_startup(log_text: str, why: str) -> Failure:
 
 @contextlib.contextmanager
 def _kill_tree(process: subprocess.Popen) -> Iterator[None]:
-    """Whatever happens, the application's whole process group is gone afterwards."""
+    """Whatever happens, the application's whole process tree is gone afterwards."""
     try:
         yield
     finally:
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=_KILL_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+        terminate_process_tree(process, _KILL_GRACE_SECONDS)
 
 
 class SmokeRunner:

@@ -1,44 +1,43 @@
-import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
+from giml.core.platform import FreeSpace
 from giml.maven import isolation
 from giml.maven.isolation import InsufficientSpace, TempStats, check_space, isolated_env, run_temp
 
 pytestmark = pytest.mark.real_space_check
 
 
-def fake_statvfs(free_bytes=10**12, free_inodes=10**6, total_inodes=10**6):
-    return lambda path: SimpleNamespace(f_bavail=free_bytes // 4096, f_frsize=4096, f_favail=free_inodes, f_files=total_inodes)
+def fake_free_space(free_bytes=10**12, free_inodes=10**6):
+    return lambda path: FreeSpace(bytes=free_bytes, inodes=free_inodes)
 
 
 def test_check_space_accepts_a_roomy_filesystem(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, "statvfs", fake_statvfs())
+    monkeypatch.setattr(isolation, "free_space", fake_free_space())
     check_space(tmp_path)
 
 
 def test_check_space_refuses_low_disk_space_naming_the_numbers(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, "statvfs", fake_statvfs(free_bytes=100 * 1024 * 1024))
+    monkeypatch.setattr(isolation, "free_space", fake_free_space(free_bytes=100 * 1024 * 1024))
     with pytest.raises(InsufficientSpace, match=r"only 100 MB free .*need 512 MB"):
         check_space(tmp_path)
 
 
 def test_check_space_refuses_when_inodes_run_out_even_with_space_left(monkeypatch, tmp_path):
     # The /tmp incident: 635 MB free but 10 inodes.
-    monkeypatch.setattr(os, "statvfs", fake_statvfs(free_bytes=635 * 1024 * 1024, free_inodes=10, total_inodes=171024))
+    monkeypatch.setattr(isolation, "free_space", fake_free_space(free_bytes=635 * 1024 * 1024, free_inodes=10))
     with pytest.raises(InsufficientSpace, match=r"only 10 inodes free .*need 20000"):
         check_space(tmp_path)
 
 
 def test_filesystems_without_inode_counts_are_not_refused(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, "statvfs", fake_statvfs(free_inodes=0, total_inodes=0))  # e.g. btrfs reports none
+    monkeypatch.setattr(isolation, "free_space", fake_free_space(free_inodes=None))  # e.g. NTFS or btrfs reports none
     check_space(tmp_path)
 
 
 def test_thresholds_can_be_lowered(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, "statvfs", fake_statvfs(free_bytes=100 * 1024 * 1024, free_inodes=50))
+    monkeypatch.setattr(isolation, "free_space", fake_free_space(free_bytes=100 * 1024 * 1024, free_inodes=50))
     check_space(tmp_path, min_bytes=50 * 1024 * 1024, min_inodes=10)
 
 
@@ -77,14 +76,14 @@ def test_an_untouched_temp_directory_logs_nothing_left(tmp_path):
 
 
 def test_space_is_checked_before_the_run_starts(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, "statvfs", fake_statvfs(free_inodes=5))
+    monkeypatch.setattr(isolation, "free_space", fake_free_space(free_inodes=5))
     with pytest.raises(InsufficientSpace), run_temp(tmp_path, "run-1"):
         raise AssertionError("must not start")
     assert not (tmp_path / "runs" / "run-1" / "tmp").exists()
 
 
 def test_space_checking_can_be_switched_off_for_tests(monkeypatch, tmp_path):
-    monkeypatch.setattr(os, "statvfs", fake_statvfs(free_inodes=5))
+    monkeypatch.setattr(isolation, "free_space", fake_free_space(free_inodes=5))
     with run_temp(tmp_path, "run-1", check=False) as temp:
         assert temp.path.is_dir()
 
@@ -106,9 +105,10 @@ def test_isolated_env_keeps_the_developers_java_options_and_the_chosen_jdk(tmp_p
         assert jdk_env["TMPDIR"] == "/tmp"  # the caller's mapping is not modified
 
 
-def test_a_state_directory_with_whitespace_is_refused_because_java_options_split_on_it(tmp_path):
-    with run_temp(tmp_path / "my state", "run-1") as temp, pytest.raises(ValueError, match="whitespace"):
-        isolated_env(None, {}, temp)
+def test_a_state_directory_with_whitespace_is_quoted_because_java_options_would_split_on_it(tmp_path):
+    with run_temp(tmp_path / "my state", "run-1") as temp:
+        env = isolated_env(None, {}, temp)
+        assert env["JAVA_TOOL_OPTIONS"] == f'-Djava.io.tmpdir="{temp.path}"'
 
 
 def test_module_constants_document_the_thresholds():

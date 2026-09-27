@@ -38,10 +38,10 @@ Enforced by code and tests, not just convention (full detail in
 
 ## Requirements
 
-- Linux or macOS. **Windows is not supported** (`docs/platform.md`): the
-  per-project run lock uses `fcntl.flock` and hook-disabling relies on
-  `os.devnull`, both POSIX-only. On Windows, run GiML inside WSL2 (a real
-  Linux environment) instead.
+- Linux, macOS or Windows. Windows and macOS are verified in CI
+  (`.github/workflows/tests.yml`, `docs/platform.md`); the run lock, hook
+  disabling, process-tree kill and free-space check each have a
+  platform-specific implementation behind `giml.core.platform`.
 - Python >= 3.12
 - Java + Maven (a working `mvn` on `PATH`, or a project-specific JDK
   configured per `docs/platform.md`)
@@ -55,20 +55,24 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 ```
 
+On Windows (PowerShell):
+
+```powershell
+python -m venv .venv
+.venv\Scripts\pip install -e '.[dev]'
+```
+
 Add the `ml` extra for the ML layers (scikit-learn, joblib):
 
 ```bash
 .venv/bin/pip install -e '.[dev,ml]'
 ```
 
-On WSL2, install Python, git, Java and Maven inside the WSL distro (not the
-Windows host) and run all commands from the WSL shell — GiML needs a real
-POSIX filesystem and process model underneath it.
-
 ## Usage
 
 Always work against a scratch `git clone` of the target project, never the
-original checkout.
+original checkout. On Windows, replace `.venv/bin/` with `.venv\Scripts\` in
+every command below.
 
 ```bash
 # Pull CVE data

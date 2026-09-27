@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import os
 import shutil
-import signal
 import subprocess
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from giml.core.platform import popen_in_new_group, terminate_process_tree
 
 _TERMINATE_GRACE_SECONDS = 10
 
@@ -41,19 +42,6 @@ class MavenResult:
 MavenRunner = Callable[[Path, list[str], Path, float, Env], MavenResult]
 
 
-def _kill_group(process: subprocess.Popen) -> None:
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(process.pid, sig)
-        except ProcessLookupError:
-            return
-        try:
-            process.wait(timeout=_TERMINATE_GRACE_SECONDS)
-            return
-        except subprocess.TimeoutExpired:
-            continue
-
-
 def run_maven(
     worktree: Path,
     args: Sequence[str],
@@ -71,15 +59,15 @@ def run_maven(
     with log_path.open("w", encoding="utf-8") as log:
         log.write(f"$ cd {worktree} && {' '.join(command)}\n")
         log.flush()
-        process = subprocess.Popen(command, cwd=worktree, stdout=log, stderr=subprocess.STDOUT,
-                                   env=dict(env) if env is not None else None, start_new_session=True)  # fmt: skip
+        process = popen_in_new_group(command, cwd=worktree, stdout=log, stderr=subprocess.STDOUT,
+                                     env=dict(env) if env is not None else None)  # fmt: skip
         try:
             process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
         finally:
             # Always clear the group: Maven may leave forked JVMs even after it exits.
-            _kill_group(process)
+            terminate_process_tree(process, _TERMINATE_GRACE_SECONDS)
         if timed_out:
             log.write(f"\n[giml] timed out after {timeout_seconds}s; process group killed\n")
     return MavenResult(tuple(args), None if timed_out else process.returncode,
